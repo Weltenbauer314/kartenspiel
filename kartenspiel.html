@@ -1306,11 +1306,12 @@
       return;
     }
 
-    const lastAttacker = atk ? atk.attackerId : null;
+    // Winner of the duel gets the next turn
     let nextIdx = 0;
-    if (lastAttacker) {
-      const curAliveIdx = alive.indexOf(lastAttacker);
-      nextIdx = (curAliveIdx + 1) % alive.length;
+    if (atk && atk.winner) {
+      const winnerId = atk.winner === 'attacker' ? atk.attackerId : atk.defenderId;
+      const winnerAliveIdx = alive.indexOf(winnerId);
+      if (winnerAliveIdx !== -1) nextIdx = winnerAliveIdx;
     }
 
     await update(ref(db, `rooms/${roomId}`), {
