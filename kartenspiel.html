@@ -240,6 +240,7 @@
     border: 1px solid var(--border);
     padding: 0.75rem 1.25rem;
     min-width: 130px;
+    width: 130px;
     text-align: center;
     transition: border-color 0.2s, background 0.2s;
     position: relative;
@@ -498,6 +499,83 @@
     padding: 1rem;
   }
 
+  /* === SETTINGS PANEL === */
+  .settings-btn {
+    background: transparent;
+    border: 1px solid var(--border2);
+    color: var(--text2);
+    font-family: 'Cinzel', serif;
+    font-size: 0.75rem;
+    letter-spacing: 0.08em;
+    padding: 0.35rem 0.75rem;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .settings-btn:hover { border-color: var(--gold); color: var(--gold); }
+  .settings-panel {
+    display: none;
+    position: fixed;
+    top: 50px; right: 1rem;
+    background: var(--surface);
+    border: 1px solid var(--border2);
+    padding: 1.25rem 1.5rem;
+    min-width: 240px;
+    z-index: 100;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+  }
+  .settings-panel.open { display: block; }
+  .settings-panel h3 {
+    font-family: 'Cinzel', serif;
+    font-size: 0.85rem;
+    letter-spacing: 0.1em;
+    color: var(--gold);
+    margin-bottom: 1rem;
+    text-transform: uppercase;
+  }
+  .settings-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-bottom: 0.75rem;
+    font-size: 0.9rem;
+    color: var(--text);
+  }
+  .toggle {
+    position: relative;
+    width: 36px; height: 20px;
+    flex-shrink: 0;
+  }
+  .toggle input { opacity: 0; width: 0; height: 0; }
+  .toggle-slider {
+    position: absolute;
+    inset: 0;
+    background: var(--bg3);
+    border: 1px solid var(--border2);
+    cursor: pointer;
+    transition: 0.2s;
+  }
+  .toggle-slider:before {
+    content: '';
+    position: absolute;
+    width: 12px; height: 12px;
+    left: 3px; top: 3px;
+    background: var(--text2);
+    transition: 0.2s;
+  }
+  .toggle input:checked + .toggle-slider { background: rgba(201,168,76,0.2); border-color: var(--gold); }
+  .toggle input:checked + .toggle-slider:before { transform: translateX(16px); background: var(--gold2); }
+
+  /* === CONFETTI === */
+  #confetti-canvas {
+    position: fixed;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    pointer-events: none;
+    z-index: 999;
+    display: none;
+  }
+
   /* === WIN SCREEN === */
   .win-screen {
     text-align: center;
@@ -583,6 +661,17 @@
   const RANKS = ['2','7','8','9','10','B','D','K','A'];
   const RANK_VALUES = { '7':1,'8':2,'9':3,'10':4,'B':5,'D':6,'K':7,'A':8,'2':9 };
 
+  // Sort order for hand display: 2, A, K, D, B, 10, 9, 8, 7 × Kreuz, Pik, Herz, Karo
+  const SORT_RANK = { '2':0,'A':1,'K':2,'D':3,'B':4,'10':5,'9':6,'8':7,'7':8 };
+  const SORT_SUIT = { '♣':0,'♠':1,'♥':2,'♦':3 };
+
+  function sortHand(hand) {
+    return [...hand].sort((a, b) => {
+      if (SORT_RANK[a.rank] !== SORT_RANK[b.rank]) return SORT_RANK[a.rank] - SORT_RANK[b.rank];
+      return SORT_SUIT[a.suit] - SORT_SUIT[b.suit];
+    });
+  }
+
   function buildDeck() {
     const deck = [];
     // 7-A in all 4 suits
@@ -612,11 +701,23 @@
   }
 
   // Returns winner: 'attacker' | 'defender'
-  function resolveAttack(attackCard, defendCard) {
+  function resolveAttack(attackCard, defendCard, rules) {
     const aRank = attackCard.rank;
     const dRank = defendCard.rank;
     const aSuit = attackCard.suit;
     const dSuit = defendCard.suit;
+
+    // Special rule: Karo 8 schlägt alle Asse außer Karo Ass
+    if (rules && rules.karo8BeatsAces) {
+      if (aSuit === '♦' && aRank === '8' && dRank === 'A' && !(dSuit === '♦')) return 'attacker';
+      if (dSuit === '♦' && dRank === '8' && aRank === 'A' && !(aSuit === '♦')) return 'defender';
+    }
+
+    // Special rule: Karo König schlägt alle Damen (auch in Verteidigung)
+    if (rules && rules.karoKingBeatsQueens) {
+      if (aSuit === '♦' && aRank === 'K' && dRank === 'D') return 'attacker';
+      if (dSuit === '♦' && dRank === 'K' && aRank === 'D') return 'defender';
+    }
 
     // Special: both are 2s → defender wins
     if (aRank === '2' && dRank === '2') return 'defender';
@@ -627,7 +728,6 @@
     if (aRank === '2') {
       if (highRanks.includes(dRank)) return 'attacker'; // 2 beats high
       if (lowRanks.includes(dRank)) return 'defender';  // 2 loses to low
-      // vs another 2 handled above
     }
     if (dRank === '2') {
       if (highRanks.includes(aRank)) return 'defender'; // defender 2 beats high attacker
@@ -639,15 +739,9 @@
     let dVal = RANK_VALUES[dRank];
 
     if (aSuit === dSuit) {
-      // Same suit: higher rank wins
       return aVal >= dVal ? 'attacker' : 'defender';
     }
 
-    // Different suits: color bonuses
-    // Kreuz vs Pik: Kreuz +3
-    // Pik vs Herz: Pik +3
-    // Herz vs Kreuz: Herz +3
-    // Any vs Karo: non-Karo gets +1
     if (aSuit === '♣' && dSuit === '♠') aVal += 3;
     if (aSuit === '♠' && dSuit === '♥') aVal += 3;
     if (aSuit === '♥' && dSuit === '♣') aVal += 3;
@@ -655,11 +749,9 @@
     if (dSuit === '♠' && aSuit === '♥') dVal += 3;
     if (dSuit === '♥' && aSuit === '♣') dVal += 3;
 
-    // Karo bonus: non-karo gets +1
     if (aSuit !== '♦' && dSuit === '♦') aVal += 1;
     if (dSuit !== '♦' && aSuit === '♦') dVal += 1;
 
-    // Tie: attacker wins
     return aVal >= dVal ? 'attacker' : 'defender';
   }
 
@@ -687,6 +779,8 @@
   let gameState = null;
   let selectedCard = null;
   let attackTarget = null;
+  let confirmEnabled = false; // Bestätigung standardmäßig AUS
+  let pendingKaro7Choice = null; // { attackCard, defenseCard, myHand, atkHand } for Karo 7 vs 2 choice
 
   function genId(len = 8) {
     return Math.random().toString(36).substr(2, len).toUpperCase();
@@ -802,9 +896,15 @@
       startBtn.disabled = players.length < 2;
       startBtn.title = players.length < 2 ? 'Mindestens 2 Spieler benötigt' : '';
     }
+    const rulesSection = document.getElementById('rules-section');
+    if (rulesSection) rulesSection.style.display = data.host === myId ? 'flex' : 'none';
+    const rulesTitle = rulesSection && rulesSection.previousElementSibling;
+    if (rulesTitle && rulesTitle.tagName === 'H2') rulesTitle.style.display = data.host === myId ? '' : 'none';
+    const rulesDivider = rulesTitle && rulesTitle.previousElementSibling;
+    if (rulesDivider && rulesDivider.tagName === 'HR') rulesDivider.style.display = data.host === myId ? '' : 'none';
   }
 
-  async function startGame() {
+  async function startGameInternal() {
     const snap = await get(ref(db, `rooms/${roomId}`));
     const data = snap.val();
     const players = Object.values(data.players).sort((a,b) => a.order - b.order);
@@ -817,18 +917,34 @@
       hands[players[i % n].id].push(card);
     });
 
+    // Find who has Karo 8 → starts
+    let startIndex = 0;
+    for (let i = 0; i < players.length; i++) {
+      if (hands[players[i].id].some(c => c.suit === '♦' && c.rank === '8')) {
+        startIndex = i;
+        break;
+      }
+    }
+
+    // Special rules (from lobby settings, default: on)
+    const rules = {
+      karo8BeatsAces: data.rules ? data.rules.karo8BeatsAces !== false : true,
+      karoKingBeatsQueens: data.rules ? data.rules.karoKingBeatsQueens !== false : true
+    };
+
     const gameData = {
       ...data,
       status: 'playing',
       hands,
-      turnIndex: 0,
+      turnIndex: startIndex,
       playerOrder: players.map(p => p.id),
       eliminated: [],
-      phase: 'attack', // 'attack' | 'defend' | 'result'
-      currentAttack: null, // { attackerId, defenderId, card }
-      lastAttackPair: null, // { attackerId, defenderId }
+      phase: 'attack',
+      currentAttack: null,
+      lastAttackPair: null,
       round: 1,
-      log: []
+      log: [],
+      rules
     };
 
     await set(ref(db, `rooms/${roomId}`), gameData);
@@ -860,21 +976,23 @@
     const alive = gs.playerOrder.filter(id => !(gs.eliminated || []).includes(id));
 
     // Check win
-    if (alive.length === 1 && gs.status === 'playing') {
-      const winner = gs.players[alive[0]];
-      showWin(winner.name, winner.id === myId);
-      return;
+    if ((alive.length === 1 && gs.status === 'playing') || gs.status === 'finished') {
+      const winnerId = gs.winner || alive[0];
+      const winner = gs.players[winnerId];
+      if (winner) {
+        showWin(winner.name, winnerId === myId);
+        return;
+      }
     }
 
-    const myHand = (gs.hands && gs.hands[myId]) ? gs.hands[myId] : [];
+    const myHand = sortHand((gs.hands && gs.hands[myId]) ? gs.hands[myId] : []);
     const iAmElim = (gs.eliminated || []).includes(myId);
     const currentTurnId = alive[gs.turnIndex % alive.length];
     const isMyTurn = currentTurnId === myId;
 
-    // Header
     document.getElementById('round-display').textContent = `Runde ${gs.round}`;
 
-    // Players row
+    // Players row - fixed width
     const playersHTML = gs.playerOrder.map(pid => {
       const p = gs.players[pid];
       const hand = gs.hands[pid] || [];
@@ -894,9 +1012,7 @@
       if (isCurrent) classes += ' current-turn';
       if (isElim) classes += ' eliminated';
 
-      // Can attack this player?
       const canAtk = isMyTurn && gs.phase === 'attack' && !isMe && !isElim && canAttackPlayer(pid);
-
       if (canAtk) classes += ' can-attack';
 
       return `<div class="${classes}" ${canAtk ? `onclick="selectTarget('${pid}')"` : ''}>
@@ -908,24 +1024,22 @@
     }).join('');
     document.getElementById('players-row').innerHTML = playersHTML;
 
-    // Arena
+    // Arena - attack card hidden until defender plays
     const atk = gs.currentAttack;
     let atkCardHTML = cardHTML(null);
     let defCardHTML = cardHTML(null);
     let resultHTML = '';
 
     if (atk) {
+      // Show attacker's card: visible to attacker themselves, and once defense card is played (result/karo7choice)
+      const showAtkCard = gs.phase === 'result' || gs.phase === 'karo7choice' || atk.attackerId === myId || atk.defenseCard;
       if (atk.card) {
-        if (gs.phase === 'defend' || gs.phase === 'result') {
-          atkCardHTML = cardHTML(atk.card);
-        } else {
-          atkCardHTML = cardHTML(null);
-        }
+        atkCardHTML = showAtkCard ? cardHTML(atk.card) : cardHTML(null);
       }
       if (atk.defenseCard) {
         defCardHTML = cardHTML(atk.defenseCard);
       }
-      if (gs.phase === 'result' && atk.winner) {
+      if ((gs.phase === 'result' || gs.phase === 'karo7choice') && atk.winner) {
         const winnerName = gs.players[atk.winner === 'attacker' ? atk.attackerId : atk.defenderId].name;
         const cls = atk.winner === 'attacker' ? (atk.attackerId === myId ? 'win' : 'lose') : (atk.defenderId === myId ? 'win' : 'lose');
         resultHTML = `<div class="battle-result-text ${cls}">⚔ ${winnerName} gewinnt!</div>`;
@@ -948,7 +1062,7 @@
       <div class="battle-result">${resultHTML}</div>
     `;
 
-    // My hand
+    // My hand (sorted)
     const handHTML = myHand.map((card, i) => {
       let cls = 'selectable';
       if (selectedCard && selectedCard.id === card.id) cls += ' selected';
@@ -958,7 +1072,6 @@
       ? '<p class="text-muted" style="padding:1rem">Du bist ausgeschieden.</p>'
       : handHTML;
 
-    // Attach card click
     document.querySelectorAll('#hand-cards .card.selectable').forEach(el => {
       el.onclick = () => {
         const cid = el.dataset.id;
@@ -983,22 +1096,42 @@
       if (atk && atk.defenderId === myId) statusMsg = `<strong>Du wirst angegriffen!</strong> Wähle eine Karte zur Verteidigung.`;
       else statusMsg = atk ? `<strong>${gs.players[atk.defenderId].name}</strong> verteidigt sich...` : '';
     } else if (gs.phase === 'result') {
-      statusMsg = resultHTML ? `${resultHTML.replace('battle-result-text', 'status-text')}` : '';
+      statusMsg = resultHTML || '';
+    } else if (gs.phase === 'karo7choice') {
+      if (atk && atk.attackerId === myId) {
+        statusMsg = `<strong>Karo 7 Sieg!</strong> Möchtest du die gegnerische 2 statt deiner Karo 7 behalten?`;
+      } else {
+        statusMsg = atk ? `<strong>${gs.players[atk.attackerId].name}</strong> entscheidet über den Kartentausch...` : '';
+      }
     }
     setStatus(statusMsg);
 
     // Actions
     let actionsHTML = '';
     if (!iAmElim) {
-      if (gs.phase === 'attack' && isMyTurn && attackTarget && selectedCard) {
-        actionsHTML = `<button class="btn btn-primary" onclick="confirmAttack()">⚔ Angriff bestätigen</button>
-          <button class="btn" onclick="cancelAttack()">Abbrechen</button>`;
+      if (gs.phase === 'attack' && isMyTurn) {
+        if (attackTarget && selectedCard) {
+          if (confirmEnabled) {
+            actionsHTML = `<button class="btn btn-primary" onclick="confirmAttack()">⚔ Angriff bestätigen</button>
+              <button class="btn" onclick="cancelAttack()">Abbrechen</button>`;
+          } else {
+            // Auto-confirm
+            setTimeout(() => { if (gameState && gameState.phase === 'attack' && attackTarget && selectedCard) confirmAttack(); }, 0);
+          }
+        }
       } else if (gs.phase === 'defend' && atk && atk.defenderId === myId && selectedCard) {
-        actionsHTML = `<button class="btn btn-primary" onclick="confirmDefend()">🛡 Verteidigen</button>`;
+        if (confirmEnabled) {
+          actionsHTML = `<button class="btn btn-primary" onclick="confirmDefend()">🛡 Verteidigen</button>`;
+        } else {
+          setTimeout(() => { if (gameState && gameState.phase === 'defend' && selectedCard) confirmDefend(); }, 0);
+        }
+      } else if (gs.phase === 'karo7choice' && atk && atk.attackerId === myId) {
+        actionsHTML = `<button class="btn btn-primary" onclick="karo7TakeTwo()">2 nehmen (Karo 7 abgeben)</button>
+          <button class="btn" onclick="karo7KeepSeven()">Karo 7 behalten</button>`;
       } else if (gs.phase === 'result') {
-        // Host or winner acknowledges
+        // Auto-advance after short delay (host triggers)
         if (gs.host === myId) {
-          actionsHTML = `<button class="btn btn-primary" onclick="nextTurn()">Weiter ▶</button>`;
+          setTimeout(() => { if (gameState && gameState.phase === 'result') nextTurn(); }, 1500);
         }
       }
     }
@@ -1016,6 +1149,9 @@
   function canAttackPlayer(targetId) {
     const gs = gameState;
     if (!gs) return false;
+    const alive = gs.playerOrder.filter(id => !(gs.eliminated || []).includes(id));
+    // With only 2 players alive, the same defender CAN be targeted again
+    if (alive.length <= 2) return true;
     const last = gs.lastAttackPair;
     if (last && last.attackerId === myId && last.defenderId === targetId) return false;
     return true;
@@ -1037,7 +1173,6 @@
     if (!selectedCard || !attackTarget) return;
     const gs = gameState;
 
-    // Remove card from hand
     const hand = [...gs.hands[myId]];
     const idx = hand.findIndex(c => c.id === selectedCard.id);
     if (idx === -1) return;
@@ -1070,50 +1205,85 @@
     const atk = gs.currentAttack;
     if (!atk || atk.defenderId !== myId) return;
 
-    // Remove defense card from hand
     const hand = [...gs.hands[myId]];
     const idx = hand.findIndex(c => c.id === selectedCard.id);
     if (idx === -1) return;
     hand.splice(idx, 1);
 
-    const winner = resolveAttack(atk.card, selectedCard);
+    const winner = resolveAttack(atk.card, selectedCard, gs.rules);
     const attackerName = gs.players[atk.attackerId].name;
     const defenderName = gs.players[atk.defenderId].name;
     const winnerName = winner === 'attacker' ? attackerName : defenderName;
-    const loserName = winner === 'attacker' ? defenderName : attackerName;
 
     const logMsg = `${defenderName} verteidigt mit ${selectedCard.rank}${selectedCard.suit} gegen ${atk.card.rank}${atk.card.suit}. ${winnerName} gewinnt!`;
 
-    // Winner gets card back
     const atkHand = [...(gs.hands[atk.attackerId] || [])];
-    if (winner === 'attacker') {
+
+    // Karo 7 vs 2 rule: if attacker plays Karo 7, wins against defender's 2, attacker may swap
+    const karo7Win = winner === 'attacker' && atk.card.suit === '♦' && atk.card.rank === '7' && selectedCard.rank === '2';
+
+    if (karo7Win) {
+      // Ask attacker if they want to take the 2 instead (via firebase flag)
+      // Winner gets their card back
       atkHand.push(atk.card);
+      await update(ref(db, `rooms/${roomId}`), {
+        [`hands/${myId}`]: hand,
+        [`hands/${atk.attackerId}`]: atkHand,
+        'currentAttack/defenseCard': selectedCard,
+        'currentAttack/winner': winner,
+        'currentAttack/karo7Choice': true,
+        phase: 'karo7choice',
+        [`log`]: [...(gs.log || []), logMsg]
+      });
     } else {
-      hand.push(selectedCard);
+      if (winner === 'attacker') {
+        atkHand.push(atk.card);
+      } else {
+        hand.push(selectedCard);
+      }
+      await update(ref(db, `rooms/${roomId}`), {
+        [`hands/${myId}`]: hand,
+        [`hands/${atk.attackerId}`]: atkHand,
+        'currentAttack/defenseCard': selectedCard,
+        'currentAttack/winner': winner,
+        phase: 'result',
+        [`log`]: [...(gs.log || []), logMsg]
+      });
     }
 
-    await update(ref(db, `rooms/${roomId}`), {
-      [`hands/${myId}`]: hand,
-      [`hands/${atk.attackerId}`]: atkHand,
-      'currentAttack/defenseCard': selectedCard,
-      'currentAttack/winner': winner,
-      phase: 'result',
-      [`log`]: [...(gs.log || []), logMsg]
-    });
-
     selectedCard = null;
+  };
+
+  window.karo7TakeTwo = async function() {
+    const gs = gameState;
+    const atk = gs.currentAttack;
+    if (!atk) return;
+    // Attacker swaps: gives away Karo 7, takes the 2
+    const atkHand = [...(gs.hands[atk.attackerId] || [])];
+    const karo7Idx = atkHand.findIndex(c => c.suit === '♦' && c.rank === '7' && c.id === atk.card.id);
+    if (karo7Idx !== -1) atkHand.splice(karo7Idx, 1);
+    atkHand.push(atk.defenseCard); // take the 2
+    await update(ref(db, `rooms/${roomId}`), {
+      [`hands/${atk.attackerId}`]: atkHand,
+      phase: 'result',
+    });
+  };
+
+  window.karo7KeepSeven = async function() {
+    // Attacker keeps own card (already in hand), game goes to result
+    await update(ref(db, `rooms/${roomId}`), {
+      phase: 'result',
+    });
   };
 
   window.nextTurn = async function() {
     const gs = gameState;
     const atk = gs.currentAttack;
 
-    // Check eliminations
     let newElim = [...(gs.eliminated || [])];
     for (const pid of gs.playerOrder) {
       if (!newElim.includes(pid) && (!gs.hands[pid] || gs.hands[pid].length === 0)) {
         newElim.push(pid);
-        // Append log
       }
     }
 
@@ -1130,7 +1300,6 @@
       return;
     }
 
-    // Next turn: find who attacked last, give turn to next alive player
     const lastAttacker = atk ? atk.attackerId : null;
     let nextIdx = 0;
     if (lastAttacker) {
@@ -1138,12 +1307,9 @@
       nextIdx = (curAliveIdx + 1) % alive.length;
     }
 
-    // Use alive index in turnIndex, but we need to compute global turnIndex
-    const newTurnIndex = nextIdx;
-
     await update(ref(db, `rooms/${roomId}`), {
       eliminated: newElim,
-      turnIndex: newTurnIndex,
+      turnIndex: nextIdx,
       phase: 'attack',
       currentAttack: null,
       lastAttackPair: atk ? { attackerId: atk.attackerId, defenderId: atk.defenderId } : null,
@@ -1152,9 +1318,53 @@
   };
 
   function showWin(winnerName, isMe) {
-    document.getElementById('win-name').textContent = winnerName;
-    document.getElementById('win-msg').textContent = isMe ? 'Glückwunsch! Du hast gewonnen!' : `Gut gespielt!`;
+    document.getElementById('win-name').textContent = `${winnerName} hat gewonnen!`;
+    document.getElementById('win-msg').textContent = isMe ? '🎉 Glückwunsch! Du hast gewonnen!' : `Gut gespielt!`;
     showScreen('win-screen');
+    startConfetti();
+  }
+
+  // ============================================================
+  // CONFETTI
+  // ============================================================
+  function startConfetti() {
+    const canvas = document.getElementById('confetti-canvas');
+    canvas.style.display = 'block';
+    const ctx = canvas.getContext('2d');
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+
+    const pieces = Array.from({length: 120}, () => ({
+      x: Math.random() * canvas.width,
+      y: Math.random() * -canvas.height,
+      w: 8 + Math.random() * 8,
+      h: 5 + Math.random() * 5,
+      r: Math.random() * Math.PI * 2,
+      dr: (Math.random() - 0.5) * 0.1,
+      vy: 2 + Math.random() * 3,
+      vx: (Math.random() - 0.5) * 2,
+      color: ['#c9a84c','#e8c97a','#7c6fcd','#27ae60','#c0392b','#e74c3c','#e8e0d0'][Math.floor(Math.random()*7)]
+    }));
+
+    let frame;
+    function draw() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      pieces.forEach(p => {
+        p.y += p.vy;
+        p.x += p.vx;
+        p.r += p.dr;
+        if (p.y > canvas.height) { p.y = -20; p.x = Math.random() * canvas.width; }
+        ctx.save();
+        ctx.translate(p.x, p.y);
+        ctx.rotate(p.r);
+        ctx.fillStyle = p.color;
+        ctx.fillRect(-p.w/2, -p.h/2, p.w, p.h);
+        ctx.restore();
+      });
+      frame = requestAnimationFrame(draw);
+    }
+    draw();
+    setTimeout(() => { cancelAnimationFrame(frame); canvas.style.display = 'none'; }, 6000);
   }
 
   // ============================================================
@@ -1169,11 +1379,57 @@
   };
 
   // ============================================================
+  // SETTINGS PANEL
+  // ============================================================
+  window.toggleSettings = function() {
+    const panel = document.getElementById('settings-panel');
+    panel.classList.toggle('open');
+  };
+
+  // Close settings when clicking outside
+  document.addEventListener('click', function(e) {
+    const panel = document.getElementById('settings-panel');
+    const btn = document.querySelector('.settings-btn');
+    if (panel && !panel.contains(e.target) && btn && !btn.contains(e.target)) {
+      panel.classList.remove('open');
+    }
+  });
+
+  // ============================================================
+  // BACK TO ROOM
+  // ============================================================
+  window.backToRoom = function() {
+    if (roomId) {
+      // Reset to lobby state for this client
+      showScreen('lobby-screen');
+      const url = `${location.origin}${location.pathname}?room=${roomId}`;
+      const el = document.getElementById('room-link');
+      if (el) el.textContent = url;
+      const rc = document.getElementById('room-code-display');
+      if (rc) rc.textContent = roomId;
+    } else {
+      location.href = location.pathname;
+    }
+  };
+
+  // ============================================================
   // WIRE UP GLOBAL FUNCS
   // ============================================================
   window.createRoom = createRoom;
   window.joinRoom = joinRoom;
-  window.startGame = startGame;
+  window.startGame = async function() {
+    // Read rules from lobby checkboxes before starting
+    const karo8El = document.getElementById('rule-karo8');
+    const karoKingEl = document.getElementById('rule-karoking');
+    const rulesData = {
+      karo8BeatsAces: karo8El ? karo8El.checked : true,
+      karoKingBeatsQueens: karoKingEl ? karoKingEl.checked : true
+    };
+    if (roomId) {
+      await update(ref(db, `rooms/${roomId}`), { rules: rulesData });
+    }
+    await startGameInternal();
+  };
 
   // ============================================================
   // AUTO-JOIN FROM URL
@@ -1238,6 +1494,25 @@
         <span id="room-link"></span>
         <span class="copy-btn" onclick="copyLink()">Kopieren</span>
       </div>
+
+      <hr class="divider">
+      <h2>Sonderregeln</h2>
+      <div style="display:flex;flex-direction:column;gap:0.6rem" id="rules-section">
+        <div class="settings-row">
+          <span style="font-size:0.85rem">Karo 8 schlägt alle Asse (außer Karo-Ass)</span>
+          <label class="toggle">
+            <input type="checkbox" id="rule-karo8" checked>
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+        <div class="settings-row">
+          <span style="font-size:0.85rem">Karo König schlägt alle Damen</span>
+          <label class="toggle">
+            <input type="checkbox" id="rule-karoking" checked>
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+      </div>
     </div>
 
     <button id="start-btn" class="btn btn-primary" onclick="startGame()" style="display:none">Spiel starten</button>
@@ -1249,6 +1524,17 @@
     <div class="game-header">
       <span class="game-title">⚔ Kartenduell</span>
       <span class="round-info" id="round-display">Runde 1</span>
+      <button class="settings-btn" onclick="toggleSettings()">⚙ Einstellungen</button>
+    </div>
+    <div class="settings-panel" id="settings-panel">
+      <h3>Einstellungen</h3>
+      <div class="settings-row">
+        <span>Bestätigung aktivieren</span>
+        <label class="toggle">
+          <input type="checkbox" id="confirm-toggle" onchange="confirmEnabled=this.checked">
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
     </div>
 
     <div class="game-body">
@@ -1271,17 +1557,24 @@
         <div class="log-title">Spielverlauf</div>
         <div class="log-box" id="log-box"></div>
       </div>
+
+      <div style="position:fixed;bottom:1rem;right:1rem;z-index:50">
+        <button class="btn btn-sm" onclick="backToRoom()" style="font-size:0.7rem;padding:0.4rem 0.9rem;opacity:0.7">↩ Zurück zum Raum</button>
+      </div>
     </div>
   </div>
 
   <!-- ========== WIN SCREEN ========== -->
   <div id="win-screen" class="screen win-screen">
     <div class="trophy">🏆</div>
-    <h1 id="win-name">Spieler</h1>
-    <p id="win-msg">hat gewonnen!</p>
+    <h1 id="win-name">Spieler hat gewonnen!</h1>
+    <p id="win-msg">Gut gespielt!</p>
     <button class="btn btn-primary" onclick="location.href=location.pathname">Neues Spiel</button>
+    <button class="btn" style="margin-top:0.75rem" onclick="backToRoom()">↩ Zurück zum Raum</button>
   </div>
 
 </div>
+
+<canvas id="confetti-canvas"></canvas>
 </body>
 </html>
