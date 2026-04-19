@@ -501,7 +501,11 @@
 
   /* === SETTINGS PANEL === */
   .settings-btn {
-    background: transparent;
+    position: fixed;
+    top: 0.6rem;
+    right: 1rem;
+    z-index: 200;
+    background: var(--bg2);
     border: 1px solid var(--border2);
     color: var(--text2);
     font-family: 'Cinzel', serif;
@@ -515,7 +519,7 @@
   .settings-panel {
     display: none;
     position: fixed;
-    top: 50px; right: 1rem;
+    top: 46px; right: 1rem;
     background: var(--surface);
     border: 1px solid var(--border2);
     padding: 1.25rem 1.5rem;
@@ -792,6 +796,8 @@
   function showScreen(id) {
     document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
     document.getElementById(id).classList.add('active');
+    const fixedBtn = document.getElementById('settings-btn-fixed');
+    if (fixedBtn) fixedBtn.style.display = id === 'game-screen' ? 'block' : 'none';
   }
 
   function log(msg, type = '') {
@@ -1447,6 +1453,19 @@
 
 <div id="app">
 
+  <!-- Fixed settings button (only shown during game) -->
+  <button class="settings-btn" id="settings-btn-fixed" onclick="toggleSettings()" style="display:none">⚙ Einstellungen</button>
+  <div class="settings-panel" id="settings-panel">
+    <h3>Einstellungen</h3>
+    <div class="settings-row">
+      <span>Bestätigung aktivieren</span>
+      <label class="toggle">
+        <input type="checkbox" id="confirm-toggle" onchange="confirmEnabled=this.checked">
+        <span class="toggle-slider"></span>
+      </label>
+    </div>
+  </div>
+
   <!-- ========== HOME SCREEN ========== -->
   <div id="home-screen" class="screen">
     <div class="logo">⚔ Kartenduell</div>
@@ -1524,19 +1543,7 @@
     <div class="game-header">
       <span class="game-title">⚔ Kartenduell</span>
       <span class="round-info" id="round-display">Runde 1</span>
-      <button class="settings-btn" onclick="toggleSettings()">⚙ Einstellungen</button>
     </div>
-    <div class="settings-panel" id="settings-panel">
-      <h3>Einstellungen</h3>
-      <div class="settings-row">
-        <span>Bestätigung aktivieren</span>
-        <label class="toggle">
-          <input type="checkbox" id="confirm-toggle" onchange="confirmEnabled=this.checked">
-          <span class="toggle-slider"></span>
-        </label>
-      </div>
-    </div>
-
     <div class="game-body">
       <div class="players-row" id="players-row"></div>
 
@@ -1556,10 +1563,6 @@
       <div class="log-section">
         <div class="log-title">Spielverlauf</div>
         <div class="log-box" id="log-box"></div>
-      </div>
-
-      <div style="position:fixed;bottom:1rem;right:1rem;z-index:50">
-        <button class="btn btn-sm" onclick="backToRoom()" style="font-size:0.7rem;padding:0.4rem 0.9rem;opacity:0.7">↩ Zurück zum Raum</button>
       </div>
     </div>
   </div>
