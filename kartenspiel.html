@@ -223,6 +223,7 @@
     padding: 1.5rem;
     gap: 1.5rem;
     overflow-y: auto;
+    width: 100%;
   }
 
   /* === PLAYERS ROW === */
@@ -372,6 +373,9 @@
   .my-hand-section {
     width: 100%;
     max-width: 900px;
+    min-width: min(900px, 100%);
+    align-self: stretch;
+    box-sizing: border-box;
   }
   .hand-title {
     font-family: 'Cinzel', serif;
@@ -387,6 +391,8 @@
     flex-wrap: wrap;
     gap: 0.5rem;
     justify-content: center;
+    min-height: 108px;
+    align-content: flex-start;
   }
 
   /* === PLAYING CARDS === */
