@@ -943,6 +943,7 @@
       status: 'playing',
       hands,
       turnIndex: startIndex,
+      turnPlayerId: players[startIndex].id,
       playerOrder: players.map(p => p.id),
       eliminated: [],
       phase: 'attack',
@@ -993,7 +994,10 @@
 
     const myHand = sortHand((gs.hands && gs.hands[myId]) ? gs.hands[myId] : []);
     const iAmElim = (gs.eliminated || []).includes(myId);
-    const currentTurnId = alive[gs.turnIndex % alive.length];
+    // Use turnPlayerId if set, otherwise fall back to turnIndex for backwards compat
+    const currentTurnId = gs.turnPlayerId && alive.includes(gs.turnPlayerId)
+      ? gs.turnPlayerId
+      : alive[gs.turnIndex % alive.length];
     const isMyTurn = currentTurnId === myId;
 
     document.getElementById('round-display').textContent = `Runde ${gs.round}`;
@@ -1306,17 +1310,17 @@
       return;
     }
 
-    // Winner of the duel gets the next turn
-    let nextIdx = 0;
+    // Winner of the duel gets the next turn — store ID directly to avoid index drift
+    let nextPlayerId = alive[0];
     if (atk && atk.winner) {
       const winnerId = atk.winner === 'attacker' ? atk.attackerId : atk.defenderId;
-      const winnerAliveIdx = alive.indexOf(winnerId);
-      if (winnerAliveIdx !== -1) nextIdx = winnerAliveIdx;
+      if (alive.includes(winnerId)) nextPlayerId = winnerId;
     }
 
     await update(ref(db, `rooms/${roomId}`), {
       eliminated: newElim,
-      turnIndex: nextIdx,
+      turnPlayerId: nextPlayerId,
+      turnIndex: alive.indexOf(nextPlayerId), // keep in sync for fallback
       phase: 'attack',
       currentAttack: null,
       lastAttackPair: atk ? { attackerId: atk.attackerId, defenderId: atk.defenderId } : null,
