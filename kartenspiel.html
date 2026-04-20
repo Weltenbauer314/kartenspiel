@@ -374,7 +374,7 @@
     width: 100%;
     max-width: 900px;
     min-width: min(900px, 100%);
-    align-self: stretch;
+    align-self: center;
     box-sizing: border-box;
   }
   .hand-title {
@@ -392,9 +392,10 @@
     gap: 0.5rem;
     justify-content: center;
     min-height: 108px;
-    align-content: flex-start;
+    align-content: center;
     width: 100%;
     min-width: 100%;
+    margin: 0 auto;
   }
 
   /* === PLAYING CARDS === */
@@ -806,6 +807,8 @@
   let confirmEnabled = false; // Bestätigung standardmäßig AUS
   let sortByColor = false; // Nach Farbe sortieren, standardmäßig AUS
   let pendingKaro7Choice = null; // { attackCard, defenseCard, myHand, atkHand } for Karo 7 vs 2 choice
+  let lastDeselectedAttackKey = null; // tracks which attack we already deselected for
+  let autoConfirmFired = { attack: null, defend: null }; // prevents double-firing
 
   function genId(len = 8) {
     return Math.random().toString(36).substr(2, len).toUpperCase();
@@ -1093,12 +1096,20 @@
       <div class="battle-result">${resultHTML}</div>
     `;
 
-    // Deselect if defender had pre-selected a card and attack just came in
-    if (gs.phase === 'defend' && atk && atk.defenderId === myId && selectedCard) {
-      // Only deselect if the attack card was JUST placed (defenseCard not yet played)
-      if (!atk.defenseCard) {
+    // Deselect once when a new attack arrives (defend phase starts)
+    // Use a flag keyed to the attack so we only clear once, not every render
+    if (gs.phase === 'defend' && atk && atk.card && atk.defenderId === myId && !atk.defenseCard) {
+      const atkKey = atk.card.id;
+      if (lastDeselectedAttackKey !== atkKey) {
+        lastDeselectedAttackKey = atkKey;
         selectedCard = null;
       }
+    } else if (gs.phase !== 'defend') {
+      lastDeselectedAttackKey = null;
+      autoConfirmFired.defend = null;
+    }
+    if (gs.phase !== 'attack') {
+      autoConfirmFired.attack = null;
     }
 
     // My hand (sorted)
@@ -1154,8 +1165,14 @@
             actionsHTML = `<button class="btn btn-primary" id="confirm-attack-btn" onclick="confirmAttack()">⚔ Angriff bestätigen</button>
               <button class="btn" onclick="cancelAttack()">Abbrechen</button>`;
           } else {
-            // Auto-confirm: no card pre-selection deselect needed here, just fire
-            setTimeout(() => { if (gameState && gameState.phase === 'attack' && attackTarget && selectedCard) confirmAttack(); }, 0);
+            // Auto-confirm: guard with a key so it fires exactly once per card+target combo
+            const fireKey = (selectedCard ? selectedCard.id : '') + (attackTarget || '');
+            if (autoConfirmFired.attack !== fireKey) {
+              autoConfirmFired.attack = fireKey;
+              setTimeout(() => {
+                if (gameState && gameState.phase === 'attack' && attackTarget && selectedCard) confirmAttack();
+              }, 0);
+            }
           }
         } else if (attackTarget && !selectedCard) {
           // Target chosen, waiting for card — show cancel
@@ -1166,7 +1183,13 @@
           if (confirmEnabled) {
             actionsHTML = `<button class="btn btn-primary" id="confirm-defend-btn" onclick="confirmDefend()">🛡 Verteidigung bestätigen</button>`;
           } else {
-            setTimeout(() => { if (gameState && gameState.phase === 'defend' && selectedCard) confirmDefend(); }, 0);
+            const fireKey = selectedCard ? selectedCard.id : '';
+            if (autoConfirmFired.defend !== fireKey) {
+              autoConfirmFired.defend = fireKey;
+              setTimeout(() => {
+                if (gameState && gameState.phase === 'defend' && selectedCard) confirmDefend();
+              }, 0);
+            }
           }
         }
       } else if (gs.phase === 'karo7choice' && atk && atk.attackerId === myId) {
