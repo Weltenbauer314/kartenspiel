@@ -224,6 +224,7 @@
     gap: 1.5rem;
     overflow-y: auto;
     width: 100%;
+    box-sizing: border-box;
   }
 
   /* === PLAYERS ROW === */
@@ -1498,6 +1499,9 @@
   // ============================================================
   // WIRE UP GLOBAL FUNCS
   // ============================================================
+  // Expose settings vars globally so inline handlers can reach them
+  window.setConfirmEnabled = function(val) { confirmEnabled = val; };
+  window.setSortByColor = function(val) { sortByColor = val; renderGame(); };
   window.createRoom = createRoom;
   window.joinRoom = joinRoom;
   window.startGame = async function() {
@@ -1537,14 +1541,14 @@
     <div class="settings-row">
       <span>Bestätigung aktivieren</span>
       <label class="toggle">
-        <input type="checkbox" id="confirm-toggle" onchange="confirmEnabled=this.checked">
+        <input type="checkbox" id="confirm-toggle" onchange="window.setConfirmEnabled(this.checked)">
         <span class="toggle-slider"></span>
       </label>
     </div>
     <div class="settings-row">
       <span>Nach Farbe sortieren</span>
       <label class="toggle">
-        <input type="checkbox" id="color-sort-toggle" onchange="sortByColor=this.checked; renderGame()">
+        <input type="checkbox" id="color-sort-toggle" onchange="window.setSortByColor(this.checked)">
         <span class="toggle-slider"></span>
       </label>
     </div>
