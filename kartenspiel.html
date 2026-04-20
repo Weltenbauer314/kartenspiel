@@ -393,6 +393,8 @@
     justify-content: center;
     min-height: 108px;
     align-content: flex-start;
+    width: 100%;
+    min-width: 100%;
   }
 
   /* === PLAYING CARDS === */
@@ -676,6 +678,18 @@
   const SORT_SUIT = { '♣':0,'♠':1,'♥':2,'♦':3 };
 
   function sortHand(hand) {
+    if (sortByColor) {
+      // 2er zuerst (sortiert nach Farbe), dann nach Farbe gruppiert (♣ ♠ ♥ ♦), innerhalb nach Rang absteigend (A>K>D>B>10>9>8>7)
+      const COLOR_RANK_DESC = { 'A':0,'K':1,'D':2,'B':3,'10':4,'9':5,'8':6,'7':7 };
+      return [...hand].sort((a, b) => {
+        const a2 = a.rank === '2', b2 = b.rank === '2';
+        if (a2 && b2) return SORT_SUIT[a.suit] - SORT_SUIT[b.suit];
+        if (a2) return -1;
+        if (b2) return 1;
+        if (SORT_SUIT[a.suit] !== SORT_SUIT[b.suit]) return SORT_SUIT[a.suit] - SORT_SUIT[b.suit];
+        return COLOR_RANK_DESC[a.rank] - COLOR_RANK_DESC[b.rank];
+      });
+    }
     return [...hand].sort((a, b) => {
       if (SORT_RANK[a.rank] !== SORT_RANK[b.rank]) return SORT_RANK[a.rank] - SORT_RANK[b.rank];
       return SORT_SUIT[a.suit] - SORT_SUIT[b.suit];
@@ -790,6 +804,7 @@
   let selectedCard = null;
   let attackTarget = null;
   let confirmEnabled = false; // Bestätigung standardmäßig AUS
+  let sortByColor = false; // Nach Farbe sortieren, standardmäßig AUS
   let pendingKaro7Choice = null; // { attackCard, defenseCard, myHand, atkHand } for Karo 7 vs 2 choice
 
   function genId(len = 8) {
@@ -1078,6 +1093,14 @@
       <div class="battle-result">${resultHTML}</div>
     `;
 
+    // Deselect if defender had pre-selected a card and attack just came in
+    if (gs.phase === 'defend' && atk && atk.defenderId === myId && selectedCard) {
+      // Only deselect if the attack card was JUST placed (defenseCard not yet played)
+      if (!atk.defenseCard) {
+        selectedCard = null;
+      }
+    }
+
     // My hand (sorted)
     const handHTML = myHand.map((card, i) => {
       let cls = 'selectable';
@@ -1128,18 +1151,23 @@
       if (gs.phase === 'attack' && isMyTurn) {
         if (attackTarget && selectedCard) {
           if (confirmEnabled) {
-            actionsHTML = `<button class="btn btn-primary" onclick="confirmAttack()">⚔ Angriff bestätigen</button>
+            actionsHTML = `<button class="btn btn-primary" id="confirm-attack-btn" onclick="confirmAttack()">⚔ Angriff bestätigen</button>
               <button class="btn" onclick="cancelAttack()">Abbrechen</button>`;
           } else {
-            // Auto-confirm
+            // Auto-confirm: no card pre-selection deselect needed here, just fire
             setTimeout(() => { if (gameState && gameState.phase === 'attack' && attackTarget && selectedCard) confirmAttack(); }, 0);
           }
+        } else if (attackTarget && !selectedCard) {
+          // Target chosen, waiting for card — show cancel
+          actionsHTML = `<button class="btn" onclick="cancelAttack()">Abbrechen</button>`;
         }
-      } else if (gs.phase === 'defend' && atk && atk.defenderId === myId && selectedCard) {
-        if (confirmEnabled) {
-          actionsHTML = `<button class="btn btn-primary" onclick="confirmDefend()">🛡 Verteidigen</button>`;
-        } else {
-          setTimeout(() => { if (gameState && gameState.phase === 'defend' && selectedCard) confirmDefend(); }, 0);
+      } else if (gs.phase === 'defend' && atk && atk.defenderId === myId) {
+        if (selectedCard) {
+          if (confirmEnabled) {
+            actionsHTML = `<button class="btn btn-primary" id="confirm-defend-btn" onclick="confirmDefend()">🛡 Verteidigung bestätigen</button>`;
+          } else {
+            setTimeout(() => { if (gameState && gameState.phase === 'defend' && selectedCard) confirmDefend(); }, 0);
+          }
         }
       } else if (gs.phase === 'karo7choice' && atk && atk.attackerId === myId) {
         actionsHTML = `<button class="btn btn-primary" onclick="karo7TakeTwo()">2 nehmen (Karo 7 abgeben)</button>
@@ -1412,6 +1440,21 @@
     }
   });
 
+  // Enter key to confirm action
+  document.addEventListener('keydown', function(e) {
+    if (e.key !== 'Enter') return;
+    const gs = gameState;
+    if (!gs || !confirmEnabled) return;
+    const phase = gs.phase;
+    if (phase === 'attack') {
+      const btn = document.getElementById('confirm-attack-btn');
+      if (btn) { btn.click(); }
+    } else if (phase === 'defend') {
+      const btn = document.getElementById('confirm-defend-btn');
+      if (btn) { btn.click(); }
+    }
+  });
+
   // ============================================================
   // BACK TO ROOM
   // ============================================================
@@ -1472,6 +1515,13 @@
       <span>Bestätigung aktivieren</span>
       <label class="toggle">
         <input type="checkbox" id="confirm-toggle" onchange="confirmEnabled=this.checked">
+        <span class="toggle-slider"></span>
+      </label>
+    </div>
+    <div class="settings-row">
+      <span>Nach Farbe sortieren</span>
+      <label class="toggle">
+        <input type="checkbox" id="color-sort-toggle" onchange="sortByColor=this.checked; renderGame()">
         <span class="toggle-slider"></span>
       </label>
     </div>
