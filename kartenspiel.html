@@ -519,14 +519,14 @@
   .arena-tracker-row .arena { flex: 1; max-width: 440px; min-width: 0; }
   .tracker-side { flex-shrink: 0; }
 
-  /* On narrow screens: stack below hand */
+  /* On narrow screens: stack tracker below hand */
   @media (max-width: 720px) {
     .arena-tracker-row { flex-direction: column; align-items: center; }
     .arena-tracker-row .arena { max-width: 100%; width: 100%; }
-    .tracker-side { display: none; }
+    .tracker-side { display: none !important; }
   }
   @media (min-width: 721px) {
-    .tracker-inline { display: none; }
+    .tracker-inline { display: none !important; }
   }
 
   /* === LOG === */
@@ -1184,7 +1184,7 @@
     const off = '<span class="rule-off">AUS</span>';
     box.innerHTML = `
       <div class="rule-row">Faire Kartenverteilung: ${rules.fairDeal !== false ? on : off}</div>
-      <div class="rule-row">Karten sichtbar: ${rules.cardTracker !== false ? on : off}</div>
+      <div class="rule-row">Gesch. Karten sichtbar: ${!rules || rules.cardTracker !== false ? on : off}</div>
       <div class="rule-row">♦8 schlägt ♣ ♠ ♥ Asse: ${rules.karo8BeatsAces !== false ? on : off}</div>
       <div class="rule-row">♦K schlägt Damen: ${rules.karoKingBeatsQueens !== false ? on : off}</div>
     `;
@@ -1282,20 +1282,17 @@
       }
     }
 
-    // Update tracker (visibility from gs.rules.cardTracker, media query handles side vs inline)
-    const trackerEnabled = gs.rules && gs.rules.cardTracker !== false;
-    const trackerHTML = buildTrackerHTML(gs);
-    const tSide = document.getElementById('tracker-side');
+    // Tracker: enabled = gs.rules.cardTracker (host sets in lobby, default true)
+    const trackerEnabled = !gs.rules || gs.rules.cardTracker !== false;
+    const tSide   = document.getElementById('tracker-side');
     const tInline = document.getElementById('tracker-inline');
-    if (tSide) {
-      tSide.innerHTML = trackerHTML;
-      // On wide screens: show if enabled; media query hides on narrow
-      tSide.style.display = trackerEnabled ? 'block' : 'none';
-    }
-    if (tInline) {
-      tInline.innerHTML = trackerHTML;
-      // On narrow screens: show if enabled; media query hides on wide
-      tInline.style.display = trackerEnabled ? 'block' : 'none';
+    if (trackerEnabled) {
+      const trackerHTML = buildTrackerHTML(gs);
+      if (tSide)   { tSide.innerHTML   = trackerHTML; tSide.removeAttribute('style'); }
+      if (tInline) { tInline.innerHTML = trackerHTML; tInline.removeAttribute('style'); }
+    } else {
+      if (tSide)   { tSide.innerHTML   = ''; tSide.style.display   = 'none'; }
+      if (tInline) { tInline.innerHTML = ''; tInline.style.display = 'none'; }
     }
 
     document.getElementById('arena-html').innerHTML = `
@@ -1433,8 +1430,7 @@
 
 
   function buildTrackerHTML(gs) {
-    const trackerEnabled = gs && gs.rules && gs.rules.cardTracker !== false;
-    if (!trackerEnabled || !gs) return '';
+    if (!gs) return '';
     // Collect all cards still in play (in hands) or currently being played
     const inPlay = new Set();
     // Add all cards in hands
