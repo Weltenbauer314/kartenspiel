@@ -509,6 +509,27 @@
     padding: 1rem;
   }
 
+
+  /* === RULES INFO BOX (top-left during game) === */
+  .rules-info {
+    position: fixed;
+    top: 0.55rem;
+    left: 1rem;
+    z-index: 200;
+    background: var(--bg2);
+    border: 1px solid var(--border2);
+    padding: 0.3rem 0.7rem;
+    font-family: 'Cinzel', serif;
+    font-size: 0.62rem;
+    letter-spacing: 0.06em;
+    line-height: 1.7;
+    color: var(--text2);
+    display: none;
+  }
+  .rules-info .rule-row { display: flex; align-items: center; gap: 0.35rem; white-space: nowrap; }
+  .rules-info .rule-on  { color: #2ecc71; font-weight: 600; }
+  .rules-info .rule-off { color: #e74c3c; font-weight: 600; }
+
   /* === SETTINGS PANEL === */
   .settings-btn {
     position: fixed;
@@ -823,6 +844,8 @@
     document.getElementById(id).classList.add('active');
     const fixedBtn = document.getElementById('settings-btn-fixed');
     if (fixedBtn) fixedBtn.style.display = id === 'game-screen' ? 'block' : 'none';
+    const rulesBox = document.getElementById('rules-info-box');
+    if (rulesBox) rulesBox.style.display = id === 'game-screen' ? 'block' : 'none';
   }
 
   function log(msg, type = '') {
@@ -935,18 +958,119 @@
     if (rulesDivider && rulesDivider.tagName === 'HR') rulesDivider.style.display = data.host === myId ? '' : 'none';
   }
 
+
+  function fairDeal(players) {
+    const n = players.length;
+    const hands = {};
+    players.forEach(p => { hands[p.id] = []; });
+
+    const SUITS = ['♣','♠','♥','♦'];
+    const allAces  = SUITS.map(s => ({ suit: s, rank: 'A', id: s+'A' }));
+    const allKings = SUITS.map(s => ({ suit: s, rank: 'K', id: s+'K' }));
+    const allTwos  = SUITS.map(s => ({ suit: s, rank: '2', id: s+'2' }));
+    const allQueens= SUITS.map(s => ({ suit: s, rank: 'D', id: s+'D' }));
+    const allJacks = SUITS.map(s => ({ suit: s, rank: 'B', id: s+'B' }));
+    // Number cards: 7,8,9,10 in all suits (no 2s)
+    const numRanks = ['7','8','9','10'];
+    const allNums  = SUITS.flatMap(s => numRanks.map(r => ({ suit: s, rank: r, id: s+r })));
+
+    if (n === 2) {
+      // Each: 2 Aces, 2 Kings, 2 Twos, 4 Jacks/Queens mixed, 8 number cards
+      const shuffledAces  = shuffle(allAces);
+      const shuffledKings = shuffle(allKings);
+      const shuffledTwos  = shuffle(allTwos);
+      const jqPool        = shuffle([...allQueens, ...allJacks]); // 8 cards → each gets 4
+      const numPool       = shuffle(allNums);                     // 16 cards → each gets 8
+
+      for (let i = 0; i < 2; i++) hands[players[0].id].push(shuffledAces[i]);
+      for (let i = 2; i < 4; i++) hands[players[1].id].push(shuffledAces[i]);
+
+      for (let i = 0; i < 2; i++) hands[players[0].id].push(shuffledKings[i]);
+      for (let i = 2; i < 4; i++) hands[players[1].id].push(shuffledKings[i]);
+
+      for (let i = 0; i < 2; i++) hands[players[0].id].push(shuffledTwos[i]);
+      for (let i = 2; i < 4; i++) hands[players[1].id].push(shuffledTwos[i]);
+
+      for (let i = 0; i < 8; i++) hands[players[i % 2].id].push(jqPool[i]);
+      for (let i = 0; i < 16; i++) hands[players[i % 2].id].push(numPool[i]);
+
+    } else if (n === 4) {
+      // Each: 1 Ace, 1 King, 1 Two, 2 Jacks/Queens mixed, 4 number cards
+      const shuffledAces  = shuffle(allAces);
+      const shuffledKings = shuffle(allKings);
+      const shuffledTwos  = shuffle(allTwos);
+      const jqPool        = shuffle([...allQueens, ...allJacks]); // 8 → each gets 2
+      const numPool       = shuffle(allNums);                     // 16 → each gets 4
+
+      for (let i = 0; i < 4; i++) hands[players[i].id].push(shuffledAces[i]);
+      for (let i = 0; i < 4; i++) hands[players[i].id].push(shuffledKings[i]);
+      for (let i = 0; i < 4; i++) hands[players[i].id].push(shuffledTwos[i]);
+      for (let i = 0; i < 8; i++) hands[players[i % 4].id].push(jqPool[i]);
+      for (let i = 0; i < 16; i++) hands[players[i % 4].id].push(numPool[i]);
+
+    } else if (n === 3) {
+      // Fixed: each gets ♣A, ♠A, ♥A one each; ♦A goes round-robin into Karo pool
+      // Each gets: 1 non-Karo Ace, 1 non-Karo King, 1 non-Karo Two
+      // Karo Ass, Karo König, Karo 2 → distributed one per player
+      // Each gets 3 from Jacks/Queens/Karo8 pool
+      // Each gets 5 from remaining number cards (excl 2s and Karo8)
+
+      const nonKaroAces  = ['♣','♠','♥'].map(s => ({ suit:s, rank:'A', id:s+'A' }));
+      const nonKaroKings = ['♣','♠','♥'].map(s => ({ suit:s, rank:'K', id:s+'K' }));
+      const nonKaroTwos  = ['♣','♠','♥'].map(s => ({ suit:s, rank:'2', id:s+'2' }));
+      const karoSpecials = [
+        { suit:'♦', rank:'A', id:'♦A' },
+        { suit:'♦', rank:'K', id:'♦K' },
+        { suit:'♦', rank:'2', id:'♦2' }
+      ];
+      // JQ pool + Karo 8: 4 Jacks + 4 Queens + Karo8 = 9 cards → 3 each
+      const jqKaro8Pool = shuffle([...allJacks, ...allQueens, { suit:'♦', rank:'8', id:'♦8' }]);
+      // Remaining number cards: 7,8,9,10 in all suits EXCEPT ♦8 (already in pool above)
+      const remainNums = shuffle(
+        SUITS.flatMap(s => numRanks.map(r => ({ suit:s, rank:r, id:s+r })))
+          .filter(c => !(c.suit === '♦' && c.rank === '8'))
+      ); // 15 cards → 5 each
+
+      const sAces  = shuffle(nonKaroAces);
+      const sKings = shuffle(nonKaroKings);
+      const sTwos  = shuffle(nonKaroTwos);
+      const sKaro  = shuffle(karoSpecials);
+
+      for (let i = 0; i < 3; i++) {
+        hands[players[i].id].push(sAces[i]);
+        hands[players[i].id].push(sKings[i]);
+        hands[players[i].id].push(sTwos[i]);
+        hands[players[i].id].push(sKaro[i]);
+        hands[players[i].id].push(jqKaro8Pool[i*3]);
+        hands[players[i].id].push(jqKaro8Pool[i*3+1]);
+        hands[players[i].id].push(jqKaro8Pool[i*3+2]);
+        hands[players[i].id].push(remainNums[i*5]);
+        hands[players[i].id].push(remainNums[i*5+1]);
+        hands[players[i].id].push(remainNums[i*5+2]);
+        hands[players[i].id].push(remainNums[i*5+3]);
+        hands[players[i].id].push(remainNums[i*5+4]);
+      }
+    }
+
+    return hands;
+  }
+
   async function startGameInternal() {
     const snap = await get(ref(db, `rooms/${roomId}`));
     const data = snap.val();
     const players = Object.values(data.players).sort((a,b) => a.order - b.order);
 
-    const deck = shuffle(buildDeck());
-    const n = players.length;
-    const hands = {};
-    players.forEach((p, i) => { hands[p.id] = []; });
-    deck.forEach((card, i) => {
-      hands[players[i % n].id].push(card);
-    });
+    const fairDealEnabled = data.rules && data.rules.fairDeal;
+    let hands;
+    if (fairDealEnabled && (players.length === 2 || players.length === 3 || players.length === 4)) {
+      hands = fairDeal(players);
+    } else {
+      const deck = shuffle(buildDeck());
+      const n = players.length;
+      hands = {};
+      players.forEach((p, i) => { hands[p.id] = []; });
+      deck.forEach((card, i) => { hands[players[i % n].id].push(card); });
+    }
 
     // Find who has Karo 8 → starts
     let startIndex = 0;
@@ -960,7 +1084,8 @@
     // Special rules (from lobby settings, default: on)
     const rules = {
       karo8BeatsAces: data.rules ? data.rules.karo8BeatsAces !== false : true,
-      karoKingBeatsQueens: data.rules ? data.rules.karoKingBeatsQueens !== false : true
+      karoKingBeatsQueens: data.rules ? data.rules.karoKingBeatsQueens !== false : true,
+      fairDeal: data.rules ? !!data.rules.fairDeal : false
     };
 
     const gameData = {
@@ -987,7 +1112,21 @@
   // ============================================================
   function startGameUI() {
     showScreen('game-screen');
+    updateRulesInfoBox(gameState && gameState.rules ? gameState.rules : {});
     watchGame();
+  }
+
+  function updateRulesInfoBox(rules) {
+    const box = document.getElementById('rules-info-box');
+    if (!box) return;
+    box.style.display = 'block';
+    const on  = '<span class="rule-on">AN</span>';
+    const off = '<span class="rule-off">AUS</span>';
+    box.innerHTML = `
+      <div class="rule-row">Faire Kartenverteilung: ${rules.fairDeal ? on : off}</div>
+      <div class="rule-row">♦8 schlägt Asse: ${rules.karo8BeatsAces !== false ? on : off}</div>
+      <div class="rule-row">♦K schlägt Damen: ${rules.karoKingBeatsQueens !== false ? on : off}</div>
+    `;
   }
 
   function watchGame() {
@@ -995,6 +1134,7 @@
       onValue(gameRef, snap => {
         if (!snap.exists()) return;
         gameState = snap.val();
+        if (gameState.rules) updateRulesInfoBox(gameState.rules);
         renderGame();
       });
     }
@@ -1508,9 +1648,11 @@
     // Read rules from lobby checkboxes before starting
     const karo8El = document.getElementById('rule-karo8');
     const karoKingEl = document.getElementById('rule-karoking');
+    const fairDealEl = document.getElementById('rule-fairdeal');
     const rulesData = {
       karo8BeatsAces: karo8El ? karo8El.checked : true,
-      karoKingBeatsQueens: karoKingEl ? karoKingEl.checked : true
+      karoKingBeatsQueens: karoKingEl ? karoKingEl.checked : true,
+      fairDeal: fairDealEl ? fairDealEl.checked : false
     };
     if (roomId) {
       await update(ref(db, `rooms/${roomId}`), { rules: rulesData });
@@ -1606,6 +1748,14 @@
       <h2>Sonderregeln</h2>
       <div style="display:flex;flex-direction:column;gap:0.6rem" id="rules-section">
         <div class="settings-row">
+          <span style="font-size:0.85rem;font-weight:600;color:var(--gold)">Faire Kartenverteilung</span>
+          <label class="toggle">
+            <input type="checkbox" id="rule-fairdeal">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+        <hr style="border:none;border-top:1px solid var(--border);margin:0.1rem 0">
+        <div class="settings-row">
           <span style="font-size:0.85rem">Karo 8 schlägt alle Asse (außer Karo-Ass)</span>
           <label class="toggle">
             <input type="checkbox" id="rule-karo8" checked>
@@ -1628,6 +1778,7 @@
 
   <!-- ========== GAME SCREEN ========== -->
   <div id="game-screen" class="screen">
+    <div id="rules-info-box" class="rules-info"></div>
     <div class="game-header">
       <span class="game-title">⚔ Kartenduell</span>
       <span class="round-info" id="round-display">Runde 1</span>
