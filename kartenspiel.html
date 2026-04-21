@@ -3,7 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Kartenduell</title>
+<title>⚔ Kartenduell</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚔</text></svg>">
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Crimson+Pro:ital,wght@0,300;0,400;0,600;1,400&display=swap');
 
@@ -947,6 +948,7 @@
     };
 
     await set(ref(db, `rooms/${roomId}`), roomData);
+    saveSession();
     enterLobby();
   }
 
@@ -969,6 +971,7 @@
 
     const order = count;
     await update(ref(db, `rooms/${roomId}/players/${myId}`), { name, id: myId, order });
+    saveSession();
     enterLobby();
   }
 
@@ -1776,11 +1779,58 @@
   };
 
   // ============================================================
+  // SESSION PERSISTENCE
+  // ============================================================
+  function saveSession() {
+    if (myId && myName && roomId) {
+      sessionStorage.setItem('kd_myId', myId);
+      sessionStorage.setItem('kd_myName', myName);
+      sessionStorage.setItem('kd_roomId', roomId);
+    }
+  }
+
+  function clearSession() {
+    sessionStorage.removeItem('kd_myId');
+    sessionStorage.removeItem('kd_myName');
+    sessionStorage.removeItem('kd_roomId');
+  }
+
+  // ============================================================
   // AUTO-JOIN FROM URL
   // ============================================================
   window.addEventListener('load', () => {
     const params = new URLSearchParams(location.search);
     const roomParam = params.get('room');
+
+    // Try to restore session (page reload recovery)
+    const savedId   = sessionStorage.getItem('kd_myId');
+    const savedName = sessionStorage.getItem('kd_myName');
+    const savedRoom = sessionStorage.getItem('kd_roomId');
+
+    if (savedId && savedName && savedRoom) {
+      myId   = savedId;
+      myName = savedName;
+      roomId = savedRoom;
+      // Reconnect and check current room state
+      gameRef = ref(db, `rooms/${roomId}`);
+      get(gameRef).then(snap => {
+        if (!snap.exists()) { clearSession(); showScreen('home-screen'); return; }
+        const data = snap.val();
+        // Check if this player is still in the room
+        if (!data.players || !data.players[myId]) { clearSession(); showScreen('home-screen'); return; }
+        if (data.status === 'playing') {
+          gameState = data;
+          startGameUI();
+        } else if (data.status === 'finished') {
+          gameState = data;
+          startGameUI(); // renderGame() will show win screen
+        } else {
+          enterLobby();
+        }
+      }).catch(() => { clearSession(); showScreen('home-screen'); });
+      return;
+    }
+
     if (roomParam) {
       document.getElementById('join-code').value = roomParam.toUpperCase();
       document.getElementById('join-section').scrollIntoView({ behavior: 'smooth' });
@@ -1937,8 +1987,7 @@
     <div class="trophy">🏆</div>
     <h1 id="win-name">Spieler hat gewonnen!</h1>
     <p id="win-msg">Gut gespielt!</p>
-    <button class="btn btn-primary" onclick="location.href=location.pathname">Neues Spiel</button>
-    <button class="btn" style="margin-top:0.75rem" onclick="backToRoom()">↩ Zurück zum Raum</button>
+    <button class="btn btn-primary" onclick="backToRoom()">↩ Zurück zum Raum</button>
   </div>
 
 </div>
