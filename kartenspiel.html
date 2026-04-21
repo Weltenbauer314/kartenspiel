@@ -470,6 +470,66 @@
   }
   .card.small-card { --card-w: 56px; --card-h: 80px; }
 
+
+  /* === CARD TRACKER TABLE === */
+  .tracker-wrap {
+    display: none; /* shown via JS */
+  }
+  .tracker-title {
+    font-family: 'Cinzel', serif;
+    font-size: 0.75rem;
+    letter-spacing: 0.1em;
+    color: var(--text2);
+    text-transform: uppercase;
+    margin-bottom: 0.5rem;
+    text-align: center;
+  }
+  .tracker-table {
+    border-collapse: collapse;
+    font-size: 0.72rem;
+    background: var(--surface);
+    border: 1px solid var(--border);
+  }
+  .tracker-table th, .tracker-table td {
+    border: 1px solid var(--border);
+    padding: 0.2rem 0.32rem;
+    text-align: center;
+    white-space: nowrap;
+  }
+  .tracker-table th {
+    font-family: 'Cinzel', serif;
+    font-size: 0.65rem;
+    letter-spacing: 0.06em;
+    color: var(--text2);
+    background: var(--bg3);
+  }
+  .tracker-table .suit-cell { font-size: 0.9rem; line-height: 1; }
+  .tracker-table .t-in  { color: #2ecc71; font-size: 0.85rem; }
+  .tracker-table .t-out { color: #e74c3c; font-size: 0.85rem; }
+
+  /* Side-by-side layout: arena + tracker */
+  .arena-tracker-row {
+    display: flex;
+    gap: 1.25rem;
+    align-items: flex-start;
+    justify-content: center;
+    width: 100%;
+    max-width: 900px;
+  }
+  .arena-tracker-row .arena { flex: 1; max-width: 440px; min-width: 0; }
+  .tracker-side { flex-shrink: 0; }
+
+  /* On narrow screens: stack below hand */
+  @media (max-width: 720px) {
+    .arena-tracker-row { flex-direction: column; align-items: center; }
+    .arena-tracker-row .arena { max-width: 100%; width: 100%; }
+    .tracker-side { display: none !important; }
+    .tracker-inline { display: block !important; }
+  }
+  @media (min-width: 721px) {
+    .tracker-inline { display: none !important; }
+  }
+
   /* === LOG === */
   .log-section {
     width: 100%;
@@ -831,6 +891,7 @@
   let pendingKaro7Choice = null; // { attackCard, defenseCard, myHand, atkHand } for Karo 7 vs 2 choice
   let lastDeselectedAttackKey = null; // tracks which attack we already deselected for
   let autoConfirmFired = { attack: null, defend: null }; // prevents double-firing
+  let showCardTracker = true; // Sichtbare geschlagene Karten, default: AN
 
   function genId(len = 8) {
     return Math.random().toString(36).substr(2, len).toUpperCase();
@@ -1085,7 +1146,7 @@
     const rules = {
       karo8BeatsAces: data.rules ? data.rules.karo8BeatsAces !== false : true,
       karoKingBeatsQueens: data.rules ? data.rules.karoKingBeatsQueens !== false : true,
-      fairDeal: data.rules ? !!data.rules.fairDeal : false
+      fairDeal: data.rules ? (data.rules.fairDeal !== false) : true
     };
 
     const gameData = {
@@ -1124,7 +1185,7 @@
     const off = '<span class="rule-off">AUS</span>';
     box.innerHTML = `
       <div class="rule-row">Faire Kartenverteilung: ${rules.fairDeal ? on : off}</div>
-      <div class="rule-row">♦8 schlägt Asse: ${rules.karo8BeatsAces !== false ? on : off}</div>
+      <div class="rule-row">♦8 schlägt ♣ ♠ ♥ Asse: ${rules.karo8BeatsAces !== false ? on : off}</div>
       <div class="rule-row">♦K schlägt Damen: ${rules.karoKingBeatsQueens !== false ? on : off}</div>
     `;
   }
@@ -1220,6 +1281,13 @@
         resultHTML = `<div class="battle-result-text ${cls}">⚔ ${winnerName} gewinnt!</div>`;
       }
     }
+
+    // Update tracker
+    const trackerHTML = buildTrackerHTML(gs);
+    const tSide = document.getElementById('tracker-side');
+    const tInline = document.getElementById('tracker-inline');
+    if (tSide) { tSide.innerHTML = trackerHTML; tSide.style.display = showCardTracker ? '' : 'none'; }
+    if (tInline) { tInline.innerHTML = trackerHTML; tInline.style.display = ''; /* CSS media query handles actual visibility */ }
 
     document.getElementById('arena-html').innerHTML = `
       <div class="arena-title">Kampfarena</div>
@@ -1352,6 +1420,45 @@
         .map(e => `<div class="log-entry">${e}</div>`).join('');
       logBox.scrollTop = logBox.scrollHeight;
     }
+  }
+
+
+  function buildTrackerHTML(gs) {
+    if (!showCardTracker || !gs) return '';
+    // Collect all cards still in play (in hands) or currently being played
+    const inPlay = new Set();
+    // Add all cards in hands
+    Object.values(gs.hands || {}).forEach(hand => {
+      (hand || []).forEach(c => inPlay.add(c.id));
+    });
+    // Add cards in current attack (attacker's card is removed from hand already)
+    const atk = gs.currentAttack;
+    if (atk) {
+      if (atk.card) inPlay.add(atk.card.id);
+      if (atk.defenseCard) inPlay.add(atk.defenseCard.id);
+    }
+
+    const SUITS = ['♣','♠','♥','♦'];
+    const SUIT_COLORS = { '♣':'#e8e0d0','♠':'#e8e0d0','♥':'#e74c3c','♦':'#e74c3c' };
+    const COL_RANKS = ['2','A','K','D','B','10','9','8','7'];
+
+    let html = '<div class="tracker-title">Karten im Spiel</div>';
+    html += '<table class="tracker-table"><thead><tr><th></th>';
+    COL_RANKS.forEach(r => { html += `<th>${r}</th>`; });
+    html += '</tr></thead><tbody>';
+
+    SUITS.forEach(suit => {
+      const color = SUIT_COLORS[suit];
+      html += `<tr><td class="suit-cell" style="color:${color}">${suit}</td>`;
+      COL_RANKS.forEach(rank => {
+        const id = suit + rank;
+        const active = inPlay.has(id);
+        html += `<td class="${active ? 't-in' : 't-out'}">${active ? '✓' : '✗'}</td>`;
+      });
+      html += '</tr>';
+    });
+    html += '</tbody></table>';
+    return html;
   }
 
   function canAttackPlayer(targetId) {
@@ -1641,6 +1748,7 @@
   // ============================================================
   // Expose settings vars globally so inline handlers can reach them
   window.setConfirmEnabled = function(val) { confirmEnabled = val; };
+  window.setShowCardTracker = function(val) { showCardTracker = val; renderGame(); };
   window.setSortByColor = function(val) { sortByColor = val; renderGame(); };
   window.createRoom = createRoom;
   window.joinRoom = joinRoom;
@@ -1652,7 +1760,7 @@
     const rulesData = {
       karo8BeatsAces: karo8El ? karo8El.checked : true,
       karoKingBeatsQueens: karoKingEl ? karoKingEl.checked : true,
-      fairDeal: fairDealEl ? fairDealEl.checked : false
+      fairDeal: fairDealEl ? fairDealEl.checked : true
     };
     if (roomId) {
       await update(ref(db, `rooms/${roomId}`), { rules: rulesData });
@@ -1691,6 +1799,13 @@
       <span>Nach Farbe sortieren</span>
       <label class="toggle">
         <input type="checkbox" id="color-sort-toggle" onchange="window.setSortByColor(this.checked)">
+        <span class="toggle-slider"></span>
+      </label>
+    </div>
+    <div class="settings-row">
+      <span>Geschlagene Karten sichtbar</span>
+      <label class="toggle">
+        <input type="checkbox" id="tracker-toggle" checked onchange="window.setShowCardTracker(this.checked)">
         <span class="toggle-slider"></span>
       </label>
     </div>
@@ -1750,7 +1865,7 @@
         <div class="settings-row">
           <span style="font-size:0.85rem;font-weight:600;color:var(--gold)">Faire Kartenverteilung</span>
           <label class="toggle">
-            <input type="checkbox" id="rule-fairdeal">
+            <input type="checkbox" id="rule-fairdeal" checked>
             <span class="toggle-slider"></span>
           </label>
         </div>
@@ -1790,7 +1905,11 @@
         <div class="status-text" id="status-text">Warte auf Spielzug...</div>
       </div>
 
-      <div class="arena fade-in" id="arena-html"></div>
+      <div class="arena-tracker-row" id="arena-tracker-row">
+        <div class="arena fade-in" id="arena-html"></div>
+        <div class="tracker-side tracker-wrap" id="tracker-side"></div>
+      </div>
+      <div class="tracker-inline tracker-wrap" id="tracker-inline"></div>
 
       <div class="my-hand-section">
         <div class="hand-title">Deine Karten</div>
