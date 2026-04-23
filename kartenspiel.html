@@ -546,7 +546,7 @@
   .log-box {
     background: var(--bg3);
     border: 1px solid var(--border);
-    height: 100px;
+    height: 130px;
     overflow-y: auto;
     padding: 0.5rem 0.75rem;
   }
@@ -756,7 +756,7 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 0 2vw;
+    padding: 0 8vw;
   }
   .countdown-number {
     font-family: 'Cinzel', serif;
@@ -1526,11 +1526,11 @@
     }
     document.getElementById('action-bar').innerHTML = actionsHTML;
 
-    // Log – nur die letzten 2 Spielzüge anzeigen
+    // Log – nur die letzten 4 Spielzüge anzeigen
     const logBox = document.getElementById('log-box');
     if (logBox && gs.log) {
-      const lastTwo = gs.log.slice(-2);
-      logBox.innerHTML = lastTwo
+      const lastFour = gs.log.slice(-4);
+      logBox.innerHTML = lastFour
         .map(e => `<div class="log-entry">${e}</div>`).join('');
       logBox.scrollTop = logBox.scrollHeight;
     }
@@ -1579,11 +1579,26 @@
 
     // Static display for non-active players (already in HTML from renderGame)
     // Only tick the current player's timer down in real time
-    if (!gs.timerTurnStart || !gs.timerClocks[currentTurnId]) return;
+    if (!gs.timerTurnStart) return;
     if (gs.phase === 'result' || gs.phase === 'karo7choice' || gs.phase === 'done') return;
 
-    const stored = gs.timerClocks[currentTurnId]; // seconds remaining when turn started
+    // BUG FIX: timerClocks[x] can be 0 (falsy) – use explicit null/undefined check
+    const stored = gs.timerClocks[currentTurnId];
+    if (stored === null || stored === undefined) return;
+
     const turnStartMs = gs.timerTurnStart;
+
+    // BUG FIX: If stored is already 0 and it's this player's turn, eliminate immediately
+    // (avoids the case where the interval never starts because stored === 0)
+    const initialElapsed = (Date.now() - turnStartMs) / 1000;
+    const initialRemaining = Math.max(0, stored - initialElapsed);
+    if (initialRemaining <= 0) {
+      hideCountdown();
+      if (gameState && gameState.host === myId) {
+        eliminateByTimeout(currentTurnId);
+      }
+      return;
+    }
 
     const intervalId = setInterval(() => {
       const elapsed = (Date.now() - turnStartMs) / 1000;
@@ -1600,9 +1615,10 @@
         }
       }
 
-      // Countdown overlay (last 15 sec, only for the player whose turn it is or everyone sees it)
+      // Countdown overlay (last 15 sec) – rot für eigenen Timer, grau für fremden
       if (remaining <= 15 && remaining > 0) {
-        showCountdown(Math.ceil(remaining));
+        const isOwnTimer = currentTurnId === myId;
+        showCountdown(Math.ceil(remaining), isOwnTimer);
       } else {
         hideCountdown();
       }
@@ -1613,6 +1629,7 @@
         delete timerIntervals[currentTurnId];
         hideCountdown();
         // Only the host triggers elimination to avoid race conditions
+        // BUG FIX: re-read fresh gameState at expiry time, not the stale closure value
         if (gameState && gameState.host === myId) {
           eliminateByTimeout(currentTurnId);
         }
@@ -1622,7 +1639,7 @@
     timerIntervals[currentTurnId] = intervalId;
   }
 
-  function showCountdown(num) {
+  function showCountdown(num, isOwnTimer) {
     const overlay = document.getElementById('countdown-overlay');
     const left = document.getElementById('countdown-left');
     const right = document.getElementById('countdown-right');
@@ -1630,6 +1647,15 @@
     overlay.style.display = 'flex';
     left.textContent = num;
     right.textContent = num;
+    // Eigener Timer: leuchtendes Rot; fremder Timer: dezentes Grau
+    const color = isOwnTimer ? '#e74c3c' : '#666677';
+    const shadow = isOwnTimer
+      ? '0 0 30px rgba(231,76,60,0.8), 0 0 60px rgba(231,76,60,0.4)'
+      : '0 0 12px rgba(100,100,120,0.4)';
+    [left, right].forEach(el => {
+      el.style.color = color;
+      el.style.textShadow = shadow;
+    });
   }
 
   function hideCountdown() {
@@ -1639,17 +1665,25 @@
 
   // Called by host when a player's timer expires
   async function eliminateByTimeout(expiredPlayerId) {
-    const gs = gameState;
+    // BUG FIX: Always read fresh state from Firebase – local gameState may be stale
+    // (e.g. nextTurn() already ran and changed turnPlayerId before interval fired)
+    const freshSnap = await get(ref(db, `rooms/${roomId}`));
+    if (!freshSnap.exists()) return;
+    const gs = freshSnap.val();
+
     if (!gs || gs.status !== 'playing') return;
     const alreadyElim = (gs.eliminated || []).includes(expiredPlayerId);
     if (alreadyElim) return;
 
-    const newElim = [...(gs.eliminated || []), expiredPlayerId];
-    // All cards of the expired player are removed (already absent from tracked deck)
-    const newHands = { ...gs.hands };
-    const removedCards = newHands[expiredPlayerId] || [];
-    newHands[expiredPlayerId] = [];
+    // BUG FIX: Also verify the player actually has 0 time left in the fresh state.
+    // If a bonus was granted in the meantime the clock may have been replenished.
+    if (gs.timerClocks && gs.timerClocks[expiredPlayerId] > 0 && gs.timerTurnStart) {
+      const elapsed = (Date.now() - gs.timerTurnStart) / 1000;
+      const remaining = gs.timerClocks[expiredPlayerId] - elapsed;
+      if (remaining > 1) return; // still has time, do not eliminate
+    }
 
+    const newElim = [...(gs.eliminated || []), expiredPlayerId];
     const alive = gs.playerOrder.filter(id => !newElim.includes(id));
 
     const logMsg = `⏱ ${gs.players[expiredPlayerId].name} ist durch Zeitüberschreitung ausgeschieden!`;
@@ -1690,8 +1724,6 @@
       nextPlayerId = alive[Math.floor(Math.random() * alive.length)];
     }
 
-    // Grant bonus time for next player (they get their stored time back, no penalty)
-    // The next turn will start fresh from timerTurnStart = Date.now()
     const newTimerClocks = { ...(gs.timerClocks || {}) };
     newTimerClocks[expiredPlayerId] = 0;
 
@@ -1949,6 +1981,22 @@
       }
     }
 
+    // BUG FIX: Also eliminate any player whose timer has fully expired right now
+    // (covers the race where the interval fired but eliminateByTimeout hasn't written yet)
+    if (gs.timerClocks && gs.rules && gs.rules.timerMode !== 'endless' && gs.timerTurnStart) {
+      const activeId = (gs.phase === 'defend' && atk) ? atk.defenderId : gs.turnPlayerId;
+      if (activeId && !newElim.includes(activeId)) {
+        const stored = gs.timerClocks[activeId];
+        if (typeof stored === 'number') {
+          const elapsed = (Date.now() - gs.timerTurnStart) / 1000;
+          const remaining = stored - elapsed;
+          if (remaining <= 0) {
+            newElim.push(activeId);
+          }
+        }
+      }
+    }
+
     const alive = gs.playerOrder.filter(id => !newElim.includes(id));
 
     if (alive.length === 1) {
@@ -1971,14 +2019,17 @@
 
     // Timer: reset turn start for the next player's clock
     let timerNextUpdate = {};
-    if (gs.timerClocks && gs.rules && gs.rules.timerMode !== 'endless') {
-      timerNextUpdate = { timerTurnStart: Date.now() };
+    let newTimerClocks = gs.timerClocks ? { ...gs.timerClocks } : null;
+    if (newTimerClocks && gs.rules && gs.rules.timerMode !== 'endless') {
+      // Zero out any newly eliminated players' clocks
+      newElim.forEach(id => { if (newTimerClocks[id] !== undefined) newTimerClocks[id] = 0; });
+      timerNextUpdate = { timerClocks: newTimerClocks, timerTurnStart: Date.now() };
     }
 
     await update(ref(db, `rooms/${roomId}`), {
       eliminated: newElim,
       turnPlayerId: nextPlayerId,
-      turnIndex: alive.indexOf(nextPlayerId), // keep in sync for fallback
+      turnIndex: alive.indexOf(nextPlayerId),
       phase: 'attack',
       currentAttack: null,
       lastAttackPair: atk ? { attackerId: atk.attackerId, defenderId: atk.defenderId } : null,
