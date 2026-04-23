@@ -721,6 +721,70 @@
   /* Fade in */
   @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
   .fade-in { animation: fadeIn 0.3s ease; }
+
+  /* === TIMER === */
+  .p-timer {
+    font-family: 'Cinzel', serif;
+    font-size: 0.75rem;
+    letter-spacing: 0.06em;
+    margin-top: 0.3rem;
+    padding: 0.15rem 0.4rem;
+    border-radius: 2px;
+    background: rgba(0,0,0,0.3);
+    color: var(--text2);
+  }
+  .p-timer.my-timer {
+    color: var(--gold2);
+    border: 1px solid rgba(201,168,76,0.4);
+  }
+  .p-timer.timer-warning {
+    color: #e74c3c !important;
+    border-color: rgba(231,76,60,0.5) !important;
+    animation: timerPulse 0.5s infinite;
+  }
+  @keyframes timerPulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.6; }
+  }
+
+  /* === COUNTDOWN OVERLAY (last 15 sec) === */
+  .countdown-overlay {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    pointer-events: none;
+    z-index: 500;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 2vw;
+  }
+  .countdown-number {
+    font-family: 'Cinzel', serif;
+    font-size: clamp(4rem, 12vw, 9rem);
+    font-weight: 700;
+    color: #e74c3c;
+    text-shadow: 0 0 30px rgba(231,76,60,0.8), 0 0 60px rgba(231,76,60,0.4);
+    line-height: 1;
+    transition: transform 0.2s;
+    pointer-events: none;
+    user-select: none;
+  }
+  .countdown-number.hidden { opacity: 0; }
+
+  /* === TIMER SELECT in Lobby === */
+  .timer-select {
+    background: var(--surface);
+    border: 1px solid var(--border2);
+    color: var(--text);
+    font-family: 'Crimson Pro', serif;
+    font-size: 1rem;
+    padding: 0.45rem 0.8rem;
+    cursor: pointer;
+    outline: none;
+    transition: border-color 0.2s;
+    min-width: 160px;
+  }
+  .timer-select:focus { border-color: var(--gold); }
 </style>
 </head>
 <body>
@@ -892,6 +956,10 @@
   let lastDeselectedAttackKey = null; // tracks which attack we already deselected for
   let autoConfirmFired = { attack: null, defend: null }; // prevents double-firing
 
+  // Timer state (client-side countdown, synced via Firebase timestamps)
+  let timerIntervals = {}; // pid -> intervalId
+  let timerWarningActive = false; // whether countdown overlay is showing
+
   function genId(len = 8) {
     return Math.random().toString(36).substr(2, len).toUpperCase();
   }
@@ -906,6 +974,10 @@
     if (fixedBtn) fixedBtn.style.display = id === 'game-screen' ? 'block' : 'none';
     const rulesBox = document.getElementById('rules-info-box');
     if (rulesBox) rulesBox.style.display = id === 'game-screen' ? 'block' : 'none';
+    // Reset timer tick state when navigating away from game
+    if (id !== 'game-screen') {
+      timerTickState = null;
+    }
   }
 
   function log(msg, type = '') {
@@ -1148,8 +1220,24 @@
       karo8BeatsAces: data.rules ? data.rules.karo8BeatsAces !== false : true,
       karoKingBeatsQueens: data.rules ? data.rules.karoKingBeatsQueens !== false : true,
       fairDeal: data.rules ? (data.rules.fairDeal !== false) : true,
-      cardTracker: data.rules ? (data.rules.cardTracker !== false) : true
+      cardTracker: data.rules ? (data.rules.cardTracker !== false) : true,
+      timerMode: (data.rules && data.rules.timerMode) ? data.rules.timerMode : 'endless'
     };
+
+    // Timer config per mode
+    const TIMER_CONFIG = {
+      endless: null,
+      slow:   { base: 12 * 60, bonus: 30 },
+      normal: { base: 8 * 60,  bonus: 20 },
+      fast:   { base: 4 * 60,  bonus: 10 }
+    };
+    const timerCfg = TIMER_CONFIG[rules.timerMode] || null;
+
+    // Initialize timers: each player gets base seconds, stored as remaining seconds
+    const timerClocks = {};
+    if (timerCfg) {
+      players.forEach(p => { timerClocks[p.id] = timerCfg.base; });
+    }
 
     const gameData = {
       ...data,
@@ -1164,7 +1252,9 @@
       lastAttackPair: null,
       round: 1,
       log: [],
-      rules
+      rules,
+      timerClocks: timerCfg ? timerClocks : null,
+      timerTurnStart: timerCfg ? Date.now() : null
     };
 
     await set(ref(db, `rooms/${roomId}`), gameData);
@@ -1185,11 +1275,14 @@
     box.style.display = 'block';
     const on  = '<span class="rule-on">AN</span>';
     const off = '<span class="rule-off">AUS</span>';
+    const TIMER_LABELS = { endless: 'Endlos', slow: 'Langsam', normal: 'Normal', fast: 'Schnell' };
+    const timerLabel = TIMER_LABELS[rules.timerMode] || 'Endlos';
     box.innerHTML = `
       <div class="rule-row">Faire Kartenverteilung: ${rules.fairDeal !== false ? on : off}</div>
       <div class="rule-row">Gesch. Karten sichtbar: ${!rules || rules.cardTracker !== false ? on : off}</div>
       <div class="rule-row">♦8 schlägt ♣ ♠ ♥ Asse: ${rules.karo8BeatsAces !== false ? on : off}</div>
       <div class="rule-row">♦K schlägt Damen: ${rules.karoKingBeatsQueens !== false ? on : off}</div>
+      <div class="rule-row">Timer: <span style="color:var(--gold2)">${timerLabel}</span></div>
     `;
   }
 
@@ -1254,11 +1347,22 @@
       const canAtk = isMyTurn && gs.phase === 'attack' && !isMe && !isElim && canAttackPlayer(pid);
       if (canAtk) classes += ' can-attack';
 
+      // Timer display
+      let timerHTML = '';
+      if (gs.timerClocks && gs.rules && gs.rules.timerMode && gs.rules.timerMode !== 'endless') {
+        const secs = gs.timerClocks[pid];
+        if (typeof secs === 'number') {
+          const timerCls = isMe ? 'p-timer my-timer' : 'p-timer';
+          timerHTML = `<div class="${timerCls}" id="ptimer-${pid}">${formatTimerSecs(secs)}</div>`;
+        }
+      }
+
       return `<div class="${classes}" ${canAtk ? `onclick="selectTarget('${pid}')"` : ''}>
         ${badge}
         <div class="p-name">${p.name}${isMe ? ' (Du)' : ''}</div>
         <div class="p-count">${isElim ? '✕' : hand.length}</div>
         <div class="p-label">${isElim ? 'Ausgeschieden' : 'Karten'}</div>
+        ${timerHTML}
       </div>`;
     }).join('');
     document.getElementById('players-row').innerHTML = playersHTML;
@@ -1422,13 +1526,215 @@
     }
     document.getElementById('action-bar').innerHTML = actionsHTML;
 
-    // Log
+    // Log – nur die letzten 2 Spielzüge anzeigen
     const logBox = document.getElementById('log-box');
     if (logBox && gs.log) {
-      logBox.innerHTML = [...gs.log].reverse().slice(0, 30).reverse()
+      const lastTwo = gs.log.slice(-2);
+      logBox.innerHTML = lastTwo
         .map(e => `<div class="log-entry">${e}</div>`).join('');
       logBox.scrollTop = logBox.scrollHeight;
     }
+
+    // Start or refresh client-side timer ticking
+    // In defend phase, the active countdown is the DEFENDER's clock
+    const activeTimerPlayerId = (gs.phase === 'defend' && gs.currentAttack && gs.currentAttack.defenderId)
+      ? gs.currentAttack.defenderId
+      : currentTurnId;
+    tickTimers(gs, activeTimerPlayerId);
+  }
+
+  // ============================================================
+  // TIMER HELPERS
+  // ============================================================
+  function formatTimerSecs(secs) {
+    if (typeof secs !== 'number' || secs < 0) secs = 0;
+    const m = Math.floor(secs / 60);
+    const s = Math.floor(secs % 60);
+    return `${m}:${s.toString().padStart(2,'0')}`;
+  }
+
+  // Clears all running timer intervals
+  function clearAllTimerIntervals() {
+    Object.values(timerIntervals).forEach(id => clearInterval(id));
+    timerIntervals = {};
+  }
+
+  // Main timer tick function – called from renderGame
+  // Only the current player's clock runs down; others are static
+  let timerTickState = null; // { turnPlayerId, turnStart } to detect when we need to restart
+
+  function tickTimers(gs, currentTurnId) {
+    if (!gs.timerClocks || !gs.rules || gs.rules.timerMode === 'endless') {
+      clearAllTimerIntervals();
+      hideCountdown();
+      return;
+    }
+
+    // Check if we need to (re)start: phase changed or turn changed
+    const newState = `${currentTurnId}_${gs.phase}_${gs.timerTurnStart}`;
+    if (timerTickState === newState) return; // already ticking for this state
+    timerTickState = newState;
+
+    clearAllTimerIntervals();
+
+    // Static display for non-active players (already in HTML from renderGame)
+    // Only tick the current player's timer down in real time
+    if (!gs.timerTurnStart || !gs.timerClocks[currentTurnId]) return;
+    if (gs.phase === 'result' || gs.phase === 'karo7choice' || gs.phase === 'done') return;
+
+    const stored = gs.timerClocks[currentTurnId]; // seconds remaining when turn started
+    const turnStartMs = gs.timerTurnStart;
+
+    const intervalId = setInterval(() => {
+      const elapsed = (Date.now() - turnStartMs) / 1000;
+      const remaining = Math.max(0, stored - elapsed);
+
+      // Update timer element for this player
+      const el = document.getElementById(`ptimer-${currentTurnId}`);
+      if (el) {
+        el.textContent = formatTimerSecs(remaining);
+        if (remaining <= 15) {
+          el.classList.add('timer-warning');
+        } else {
+          el.classList.remove('timer-warning');
+        }
+      }
+
+      // Countdown overlay (last 15 sec, only for the player whose turn it is or everyone sees it)
+      if (remaining <= 15 && remaining > 0) {
+        showCountdown(Math.ceil(remaining));
+      } else {
+        hideCountdown();
+      }
+
+      // Timer expired
+      if (remaining <= 0) {
+        clearInterval(intervalId);
+        delete timerIntervals[currentTurnId];
+        hideCountdown();
+        // Only the host triggers elimination to avoid race conditions
+        if (gameState && gameState.host === myId) {
+          eliminateByTimeout(currentTurnId);
+        }
+      }
+    }, 250);
+
+    timerIntervals[currentTurnId] = intervalId;
+  }
+
+  function showCountdown(num) {
+    const overlay = document.getElementById('countdown-overlay');
+    const left = document.getElementById('countdown-left');
+    const right = document.getElementById('countdown-right');
+    if (!overlay || !left || !right) return;
+    overlay.style.display = 'flex';
+    left.textContent = num;
+    right.textContent = num;
+  }
+
+  function hideCountdown() {
+    const overlay = document.getElementById('countdown-overlay');
+    if (overlay) overlay.style.display = 'none';
+  }
+
+  // Called by host when a player's timer expires
+  async function eliminateByTimeout(expiredPlayerId) {
+    const gs = gameState;
+    if (!gs || gs.status !== 'playing') return;
+    const alreadyElim = (gs.eliminated || []).includes(expiredPlayerId);
+    if (alreadyElim) return;
+
+    const newElim = [...(gs.eliminated || []), expiredPlayerId];
+    // All cards of the expired player are removed (already absent from tracked deck)
+    const newHands = { ...gs.hands };
+    const removedCards = newHands[expiredPlayerId] || [];
+    newHands[expiredPlayerId] = [];
+
+    const alive = gs.playerOrder.filter(id => !newElim.includes(id));
+
+    const logMsg = `⏱ ${gs.players[expiredPlayerId].name} ist durch Zeitüberschreitung ausgeschieden!`;
+
+    if (alive.length === 1) {
+      await update(ref(db, `rooms/${roomId}`), {
+        eliminated: newElim,
+        [`hands/${expiredPlayerId}`]: [],
+        status: 'finished',
+        winner: alive[0],
+        currentAttack: null,
+        phase: 'done',
+        [`log`]: [...(gs.log || []), logMsg]
+      });
+      return;
+    }
+
+    // Determine next player: last attacker/defender who interacted with the eliminated player
+    let nextPlayerId = null;
+    const atk = gs.currentAttack;
+    if (atk) {
+      if (atk.attackerId === expiredPlayerId && alive.includes(atk.defenderId)) {
+        nextPlayerId = atk.defenderId;
+      } else if (atk.defenderId === expiredPlayerId && alive.includes(atk.attackerId)) {
+        nextPlayerId = atk.attackerId;
+      }
+    }
+    if (!nextPlayerId && gs.lastAttackPair) {
+      const lap = gs.lastAttackPair;
+      if (lap.attackerId === expiredPlayerId && alive.includes(lap.defenderId)) {
+        nextPlayerId = lap.defenderId;
+      } else if (lap.defenderId === expiredPlayerId && alive.includes(lap.attackerId)) {
+        nextPlayerId = lap.attackerId;
+      }
+    }
+    // Fallback: random alive player
+    if (!nextPlayerId) {
+      nextPlayerId = alive[Math.floor(Math.random() * alive.length)];
+    }
+
+    // Grant bonus time for next player (they get their stored time back, no penalty)
+    // The next turn will start fresh from timerTurnStart = Date.now()
+    const newTimerClocks = { ...(gs.timerClocks || {}) };
+    newTimerClocks[expiredPlayerId] = 0;
+
+    await update(ref(db, `rooms/${roomId}`), {
+      eliminated: newElim,
+      [`hands/${expiredPlayerId}`]: [],
+      turnPlayerId: nextPlayerId,
+      turnIndex: alive.indexOf(nextPlayerId),
+      phase: 'attack',
+      currentAttack: null,
+      lastAttackPair: null,
+      timerClocks: newTimerClocks,
+      timerTurnStart: Date.now(),
+      [`log`]: [...(gs.log || []), logMsg]
+    });
+  }
+
+  // Grant timer bonus after attack/defend action
+  async function grantTimerBonus(playerId) {
+    const gs = gameState;
+    if (!gs || !gs.timerClocks || !gs.rules || gs.rules.timerMode === 'endless') return;
+    const BONUS = { slow: 30, normal: 20, fast: 10 };
+    const bonus = BONUS[gs.rules.timerMode] || 0;
+    if (!bonus) return;
+
+    // The player's current stored time is the original stored value minus elapsed since turn start
+    // But since we're granting bonus at action time, we calculate remaining then add bonus
+    const stored = gs.timerClocks[playerId] || 0;
+    const elapsed = gs.timerTurnStart ? (Date.now() - gs.timerTurnStart) / 1000 : 0;
+    const remaining = Math.max(0, stored - elapsed);
+    const newVal = remaining + bonus;
+
+    await update(ref(db, `rooms/${roomId}`), {
+      [`timerClocks/${playerId}`]: newVal,
+      timerTurnStart: Date.now()
+    });
+  }
+
+  // Stop timers when leaving game
+  function stopTimers() {
+    clearAllTimerIntervals();
+    timerTickState = null;
+    hideCountdown();
   }
 
 
@@ -1512,11 +1818,27 @@
 
     const logMsg = `${gs.players[myId].name} greift ${gs.players[attackTarget].name} an.`;
 
+    // Timer: grant attacker bonus, reset clock reference for defender's turn
+    let timerUpdate = {};
+    if (gs.timerClocks && gs.rules && gs.rules.timerMode !== 'endless') {
+      const BONUS = { slow: 30, normal: 20, fast: 10 };
+      const bonus = BONUS[gs.rules.timerMode] || 0;
+      const stored = gs.timerClocks[myId] || 0;
+      const elapsed = gs.timerTurnStart ? (Date.now() - gs.timerTurnStart) / 1000 : 0;
+      const remaining = Math.max(0, stored - elapsed) + bonus;
+      timerUpdate = {
+        [`timerClocks/${myId}`]: remaining,
+        [`timerClocks/${attackTarget}`]: gs.timerClocks[attackTarget] || 0,
+        timerTurnStart: Date.now()
+      };
+    }
+
     await update(ref(db, `rooms/${roomId}`), {
       [`hands/${myId}`]: hand,
       currentAttack: attack,
       phase: 'defend',
-      [`log`]: [...(gs.log || []), logMsg]
+      [`log`]: [...(gs.log || []), logMsg],
+      ...timerUpdate
     });
 
     selectedCard = null;
@@ -1546,6 +1868,20 @@
     // Karo 7 vs 2 rule: if attacker plays Karo 7, wins against defender's 2, attacker may swap
     const karo7Win = winner === 'attacker' && atk.card.suit === '♦' && atk.card.rank === '7' && selectedCard.rank === '2';
 
+    // Timer: grant defender bonus after defending
+    let timerUpdateDef = {};
+    if (gs.timerClocks && gs.rules && gs.rules.timerMode !== 'endless') {
+      const BONUS = { slow: 30, normal: 20, fast: 10 };
+      const bonus = BONUS[gs.rules.timerMode] || 0;
+      const stored = gs.timerClocks[myId] || 0;
+      const elapsed = gs.timerTurnStart ? (Date.now() - gs.timerTurnStart) / 1000 : 0;
+      const remaining = Math.max(0, stored - elapsed) + bonus;
+      timerUpdateDef = {
+        [`timerClocks/${myId}`]: remaining,
+        timerTurnStart: Date.now()
+      };
+    }
+
     if (karo7Win) {
       // Ask attacker if they want to take the 2 instead (via firebase flag)
       // Winner gets their card back
@@ -1557,7 +1893,8 @@
         'currentAttack/winner': winner,
         'currentAttack/karo7Choice': true,
         phase: 'karo7choice',
-        [`log`]: [...(gs.log || []), logMsg]
+        [`log`]: [...(gs.log || []), logMsg],
+        ...timerUpdateDef
       });
     } else {
       if (winner === 'attacker') {
@@ -1571,7 +1908,8 @@
         'currentAttack/defenseCard': selectedCard,
         'currentAttack/winner': winner,
         phase: 'result',
-        [`log`]: [...(gs.log || []), logMsg]
+        [`log`]: [...(gs.log || []), logMsg],
+        ...timerUpdateDef
       });
     }
 
@@ -1631,6 +1969,12 @@
       if (alive.includes(winnerId)) nextPlayerId = winnerId;
     }
 
+    // Timer: reset turn start for the next player's clock
+    let timerNextUpdate = {};
+    if (gs.timerClocks && gs.rules && gs.rules.timerMode !== 'endless') {
+      timerNextUpdate = { timerTurnStart: Date.now() };
+    }
+
     await update(ref(db, `rooms/${roomId}`), {
       eliminated: newElim,
       turnPlayerId: nextPlayerId,
@@ -1638,11 +1982,13 @@
       phase: 'attack',
       currentAttack: null,
       lastAttackPair: atk ? { attackerId: atk.attackerId, defenderId: atk.defenderId } : null,
-      round: gs.round + 1
+      round: gs.round + 1,
+      ...timerNextUpdate
     });
   };
 
   function showWin(winnerName, isMe) {
+    stopTimers();
     document.getElementById('win-name').textContent = `${winnerName} hat gewonnen!`;
     document.getElementById('win-msg').textContent = isMe ? '🎉 Glückwunsch! Du hast gewonnen!' : `Gut gespielt!`;
     showScreen('win-screen');
@@ -1739,6 +2085,7 @@
   // BACK TO ROOM
   // ============================================================
   window.backToRoom = function() {
+    stopTimers();
     if (roomId) {
       // Reset to lobby state for this client
       showScreen('lobby-screen');
@@ -1766,11 +2113,13 @@
     const karoKingEl = document.getElementById('rule-karoking');
     const fairDealEl = document.getElementById('rule-fairdeal');
     const cardTrackerEl = document.getElementById('rule-cardtracker');
+    const timerEl = document.getElementById('rule-timer');
     const rulesData = {
       karo8BeatsAces: karo8El ? karo8El.checked : true,
       karoKingBeatsQueens: karoKingEl ? karoKingEl.checked : true,
       fairDeal: fairDealEl ? fairDealEl.checked : true,
-      cardTracker: cardTrackerEl ? cardTrackerEl.checked : true
+      cardTracker: cardTrackerEl ? cardTrackerEl.checked : true,
+      timerMode: timerEl ? timerEl.value : 'endless'
     };
     if (roomId) {
       await update(ref(db, `rooms/${roomId}`), { rules: rulesData });
@@ -1926,6 +2275,15 @@
             <span class="toggle-slider"></span>
           </label>
         </div>
+        <div class="settings-row" style="margin-top:0.3rem">
+          <span style="font-size:0.85rem;font-weight:600;color:var(--gold)">Zugtimer</span>
+          <select class="timer-select" id="rule-timer">
+            <option value="endless">Endlos</option>
+            <option value="slow">Langsam (12 Min + 30 Sek/Zug)</option>
+            <option value="normal">Normal (8 Min + 20 Sek/Zug)</option>
+            <option value="fast">Schnell (4 Min + 10 Sek/Zug)</option>
+          </select>
+        </div>
         <hr style="border:none;border-top:1px solid var(--border);margin:0.1rem 0">
         <div class="settings-row">
           <span style="font-size:0.85rem">Karo 8 schlägt alle Asse (außer Karo-Ass)</span>
@@ -1993,5 +2351,11 @@
 </div>
 
 <canvas id="confetti-canvas"></canvas>
+
+<!-- Countdown overlay for last 15 seconds -->
+<div class="countdown-overlay" id="countdown-overlay" style="display:none">
+  <div class="countdown-number" id="countdown-left"></div>
+  <div class="countdown-number" id="countdown-right"></div>
+</div>
 </body>
 </html>
