@@ -1520,17 +1520,14 @@
         actionsHTML = `<button class="btn btn-primary" onclick="karo7TakeTwo()">2 nehmen (Karo 7 abgeben)</button>
           <button class="btn" onclick="karo7KeepSeven()">Karo 7 behalten</button>`;
       } else if (gs.phase === 'result') {
-        // Auto-advance after short delay (host triggers).
-        // Guard: cancel any existing timeout and start exactly one new one,
-        // keyed to the current round so duplicate renders don't fire it twice.
-        if (gs.host === myId) {
+        // Auto-advance after short delay.
+        // Coordinator = first alive player (not necessarily original host).
+        if (isActiveCoordinator(gs)) {
           const roundKey = `${gs.round}_${gs.currentAttack ? gs.currentAttack.attackerId : 'x'}`;
           if (nextTurnTimeoutId !== roundKey) {
             nextTurnTimeoutId = roundKey;
             setTimeout(() => {
-              // Double-check phase is still 'result' when it fires
               if (gameState && gameState.phase === 'result') nextTurn();
-              // Reset so future result phases can trigger again
               nextTurnTimeoutId = null;
             }, 1500);
           }
@@ -1607,7 +1604,7 @@
     const initialRemaining = Math.max(0, stored - initialElapsed);
     if (initialRemaining <= 0) {
       hideCountdown();
-      if (gameState && gameState.host === myId) {
+      if (isActiveCoordinator(gs)) {
         eliminateByTimeout(activePlayerId);
       }
       return;
@@ -1641,8 +1638,8 @@
         clearInterval(intervalId);
         delete timerIntervals[activePlayerId];
         hideCountdown();
-        // Only the host triggers elimination to avoid race conditions
-        if (gameState && gameState.host === myId) {
+        // Coordinator (first alive player) triggers elimination – not just original host
+        if (isActiveCoordinator(gameState)) {
           eliminateByTimeout(activePlayerId);
         }
       }
@@ -1774,6 +1771,22 @@
     timerTickState = null;
     nextTurnTimeoutId = null;
     hideCountdown();
+  }
+
+  // Determines which client acts as coordinator (triggers nextTurn, eliminateByTimeout).
+  // Originally always the host – but if the host is eliminated or disconnected,
+  // the first ALIVE player in playerOrder takes over. This prevents the game
+  // from freezing when the host is knocked out.
+  function isActiveCoordinator(gs) {
+    if (!gs || !gs.playerOrder) return false;
+    const eliminated = gs.eliminated || [];
+    // Find first alive player in the fixed turn order
+    const firstAlive = gs.playerOrder.find(id => !eliminated.includes(id));
+    // This client is coordinator if they are that first alive player,
+    // OR if they are the original host and no alive player has been found yet
+    // (shouldn't happen in a running game, but safe fallback)
+    if (firstAlive) return myId === firstAlive;
+    return myId === gs.host;
   }
 
 
