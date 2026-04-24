@@ -756,7 +756,7 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 0 8vw;
+    padding: 0 14vw;
   }
   .countdown-number {
     font-family: 'Cinzel', serif;
@@ -1221,15 +1221,16 @@
       karoKingBeatsQueens: data.rules ? data.rules.karoKingBeatsQueens !== false : true,
       fairDeal: data.rules ? (data.rules.fairDeal !== false) : true,
       cardTracker: data.rules ? (data.rules.cardTracker !== false) : true,
-      timerMode: (data.rules && data.rules.timerMode) ? data.rules.timerMode : 'endless'
+      timerMode: (data.rules && data.rules.timerMode) ? data.rules.timerMode : 'normal'
     };
 
     // Timer config per mode
     const TIMER_CONFIG = {
-      endless: null,
-      slow:   { base: 12 * 60, bonus: 30 },
-      normal: { base: 8 * 60,  bonus: 20 },
-      fast:   { base: 4 * 60,  bonus: 10 }
+      endless:    null,
+      slow:       { base: 12 * 60, bonus: 30 },
+      normal:     { base: 8 * 60,  bonus: 20 },
+      fast:       { base: 4 * 60,  bonus: 10 },
+      superfast:  { base: 2 * 60,  bonus: 5  }
     };
     const timerCfg = TIMER_CONFIG[rules.timerMode] || null;
 
@@ -1275,7 +1276,7 @@
     box.style.display = 'block';
     const on  = '<span class="rule-on">AN</span>';
     const off = '<span class="rule-off">AUS</span>';
-    const TIMER_LABELS = { endless: 'Endlos', slow: 'Langsam', normal: 'Normal', fast: 'Schnell' };
+    const TIMER_LABELS = { endless: 'Endlos', slow: 'Langsam', normal: 'Normal', fast: 'Schnell', superfast: 'Superschnell' };
     const timerLabel = TIMER_LABELS[rules.timerMode] || 'Endlos';
     box.innerHTML = `
       <div class="rule-row">Faire Kartenverteilung: ${rules.fairDeal !== false ? on : off}</div>
@@ -1563,7 +1564,7 @@
   // Only the current player's clock runs down; others are static
   let timerTickState = null; // { turnPlayerId, turnStart } to detect when we need to restart
 
-  function tickTimers(gs, currentTurnId) {
+  function tickTimers(gs, activePlayerId) {
     if (!gs.timerClocks || !gs.rules || gs.rules.timerMode === 'endless') {
       clearAllTimerIntervals();
       hideCountdown();
@@ -1571,7 +1572,7 @@
     }
 
     // Check if we need to (re)start: phase changed or turn changed
-    const newState = `${currentTurnId}_${gs.phase}_${gs.timerTurnStart}`;
+    const newState = `${activePlayerId}_${gs.phase}_${gs.timerTurnStart}`;
     if (timerTickState === newState) return; // already ticking for this state
     timerTickState = newState;
 
@@ -1583,7 +1584,7 @@
     if (gs.phase === 'result' || gs.phase === 'karo7choice' || gs.phase === 'done') return;
 
     // BUG FIX: timerClocks[x] can be 0 (falsy) – use explicit null/undefined check
-    const stored = gs.timerClocks[currentTurnId];
+    const stored = gs.timerClocks[activePlayerId];
     if (stored === null || stored === undefined) return;
 
     const turnStartMs = gs.timerTurnStart;
@@ -1595,7 +1596,7 @@
     if (initialRemaining <= 0) {
       hideCountdown();
       if (gameState && gameState.host === myId) {
-        eliminateByTimeout(currentTurnId);
+        eliminateByTimeout(activePlayerId);
       }
       return;
     }
@@ -1605,7 +1606,7 @@
       const remaining = Math.max(0, stored - elapsed);
 
       // Update timer element for this player
-      const el = document.getElementById(`ptimer-${currentTurnId}`);
+      const el = document.getElementById(`ptimer-${activePlayerId}`);
       if (el) {
         el.textContent = formatTimerSecs(remaining);
         if (remaining <= 15) {
@@ -1615,9 +1616,9 @@
         }
       }
 
-      // Countdown overlay (last 15 sec) – rot für eigenen Timer, grau für fremden
+      // Countdown overlay (last 15 sec) – rot wenn eigener Timer, grau wenn fremder
       if (remaining <= 15 && remaining > 0) {
-        const isOwnTimer = currentTurnId === myId;
+        const isOwnTimer = activePlayerId === myId;
         showCountdown(Math.ceil(remaining), isOwnTimer);
       } else {
         hideCountdown();
@@ -1626,17 +1627,16 @@
       // Timer expired
       if (remaining <= 0) {
         clearInterval(intervalId);
-        delete timerIntervals[currentTurnId];
+        delete timerIntervals[activePlayerId];
         hideCountdown();
         // Only the host triggers elimination to avoid race conditions
-        // BUG FIX: re-read fresh gameState at expiry time, not the stale closure value
         if (gameState && gameState.host === myId) {
-          eliminateByTimeout(currentTurnId);
+          eliminateByTimeout(activePlayerId);
         }
       }
     }, 250);
 
-    timerIntervals[currentTurnId] = intervalId;
+    timerIntervals[activePlayerId] = intervalId;
   }
 
   function showCountdown(num, isOwnTimer) {
@@ -1745,7 +1745,7 @@
   async function grantTimerBonus(playerId) {
     const gs = gameState;
     if (!gs || !gs.timerClocks || !gs.rules || gs.rules.timerMode === 'endless') return;
-    const BONUS = { slow: 30, normal: 20, fast: 10 };
+    const BONUS = { slow: 30, normal: 20, fast: 10, superfast: 5 };
     const bonus = BONUS[gs.rules.timerMode] || 0;
     if (!bonus) return;
 
@@ -1853,7 +1853,7 @@
     // Timer: grant attacker bonus, reset clock reference for defender's turn
     let timerUpdate = {};
     if (gs.timerClocks && gs.rules && gs.rules.timerMode !== 'endless') {
-      const BONUS = { slow: 30, normal: 20, fast: 10 };
+      const BONUS = { slow: 30, normal: 20, fast: 10, superfast: 5 };
       const bonus = BONUS[gs.rules.timerMode] || 0;
       const stored = gs.timerClocks[myId] || 0;
       const elapsed = gs.timerTurnStart ? (Date.now() - gs.timerTurnStart) / 1000 : 0;
@@ -1903,7 +1903,7 @@
     // Timer: grant defender bonus after defending
     let timerUpdateDef = {};
     if (gs.timerClocks && gs.rules && gs.rules.timerMode !== 'endless') {
-      const BONUS = { slow: 30, normal: 20, fast: 10 };
+      const BONUS = { slow: 30, normal: 20, fast: 10, superfast: 5 };
       const bonus = BONUS[gs.rules.timerMode] || 0;
       const stored = gs.timerClocks[myId] || 0;
       const elapsed = gs.timerTurnStart ? (Date.now() - gs.timerTurnStart) / 1000 : 0;
@@ -2170,7 +2170,7 @@
       karoKingBeatsQueens: karoKingEl ? karoKingEl.checked : true,
       fairDeal: fairDealEl ? fairDealEl.checked : true,
       cardTracker: cardTrackerEl ? cardTrackerEl.checked : true,
-      timerMode: timerEl ? timerEl.value : 'endless'
+      timerMode: timerEl ? timerEl.value : 'normal'
     };
     if (roomId) {
       await update(ref(db, `rooms/${roomId}`), { rules: rulesData });
@@ -2329,10 +2329,11 @@
         <div class="settings-row" style="margin-top:0.3rem">
           <span style="font-size:0.85rem;font-weight:600;color:var(--gold)">Zugtimer</span>
           <select class="timer-select" id="rule-timer">
-            <option value="endless">Endlos</option>
-            <option value="slow">Langsam (12 Min + 30 Sek/Zug)</option>
-            <option value="normal">Normal (8 Min + 20 Sek/Zug)</option>
+            <option value="superfast">Superschnell (2 Min + 5 Sek/Zug)</option>
             <option value="fast">Schnell (4 Min + 10 Sek/Zug)</option>
+            <option value="normal" selected>Normal (8 Min + 20 Sek/Zug)</option>
+            <option value="slow">Langsam (12 Min + 30 Sek/Zug)</option>
+            <option value="endless">Endlos</option>
           </select>
         </div>
         <hr style="border:none;border-top:1px solid var(--border);margin:0.1rem 0">
