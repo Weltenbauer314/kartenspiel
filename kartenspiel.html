@@ -1614,10 +1614,13 @@
       const elapsed = (Date.now() - turnStartMs) / 1000;
       const remaining = Math.max(0, stored - elapsed);
 
+      // Compute display value once – ceil so both displays show identical remaining seconds
+      const displaySecs = Math.ceil(remaining);
+
       // Update timer element for this player
       const el = document.getElementById(`ptimer-${activePlayerId}`);
       if (el) {
-        el.textContent = formatTimerSecs(remaining);
+        el.textContent = formatTimerSecs(displaySecs);
         if (remaining <= 15) {
           el.classList.add('timer-warning');
         } else {
@@ -1625,10 +1628,10 @@
         }
       }
 
-      // Countdown overlay (last 15 sec) – rot wenn eigener Timer, grau wenn fremder
+      // Countdown overlay (last 15 sec) – both displays use same displaySecs value
       if (remaining <= 15 && remaining > 0) {
         const isOwnTimer = activePlayerId === myId;
-        showCountdown(Math.ceil(remaining), isOwnTimer);
+        showCountdown(displaySecs, isOwnTimer);
       } else {
         hideCountdown();
       }
