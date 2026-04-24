@@ -955,6 +955,7 @@
   let pendingKaro7Choice = null; // { attackCard, defenseCard, myHand, atkHand } for Karo 7 vs 2 choice
   let lastDeselectedAttackKey = null; // tracks which attack we already deselected for
   let autoConfirmFired = { attack: null, defend: null }; // prevents double-firing
+  let nextTurnTimeoutId = null; // guard: only one pending nextTurn timeout at a time
 
   // Timer state (client-side countdown, synced via Firebase timestamps)
   let timerIntervals = {}; // pid -> intervalId
@@ -1519,9 +1520,20 @@
         actionsHTML = `<button class="btn btn-primary" onclick="karo7TakeTwo()">2 nehmen (Karo 7 abgeben)</button>
           <button class="btn" onclick="karo7KeepSeven()">Karo 7 behalten</button>`;
       } else if (gs.phase === 'result') {
-        // Auto-advance after short delay (host triggers)
+        // Auto-advance after short delay (host triggers).
+        // Guard: cancel any existing timeout and start exactly one new one,
+        // keyed to the current round so duplicate renders don't fire it twice.
         if (gs.host === myId) {
-          setTimeout(() => { if (gameState && gameState.phase === 'result') nextTurn(); }, 1500);
+          const roundKey = `${gs.round}_${gs.currentAttack ? gs.currentAttack.attackerId : 'x'}`;
+          if (nextTurnTimeoutId !== roundKey) {
+            nextTurnTimeoutId = roundKey;
+            setTimeout(() => {
+              // Double-check phase is still 'result' when it fires
+              if (gameState && gameState.phase === 'result') nextTurn();
+              // Reset so future result phases can trigger again
+              nextTurnTimeoutId = null;
+            }, 1500);
+          }
         }
       }
     }
@@ -1701,22 +1713,16 @@
       return;
     }
 
-    // Determine next player: last attacker/defender who interacted with the eliminated player
+    // Determine next player: only use currentAttack if a duel is actively in progress
+    // (defend phase). In attack phase, always pick randomly to avoid unfairly
+    // targeting the last victim again.
     let nextPlayerId = null;
     const atk = gs.currentAttack;
-    if (atk) {
+    if (atk && gs.phase === 'defend') {
       if (atk.attackerId === expiredPlayerId && alive.includes(atk.defenderId)) {
         nextPlayerId = atk.defenderId;
       } else if (atk.defenderId === expiredPlayerId && alive.includes(atk.attackerId)) {
         nextPlayerId = atk.attackerId;
-      }
-    }
-    if (!nextPlayerId && gs.lastAttackPair) {
-      const lap = gs.lastAttackPair;
-      if (lap.attackerId === expiredPlayerId && alive.includes(lap.defenderId)) {
-        nextPlayerId = lap.defenderId;
-      } else if (lap.defenderId === expiredPlayerId && alive.includes(lap.attackerId)) {
-        nextPlayerId = lap.attackerId;
       }
     }
     // Fallback: random alive player
@@ -1766,6 +1772,7 @@
   function stopTimers() {
     clearAllTimerIntervals();
     timerTickState = null;
+    nextTurnTimeoutId = null;
     hideCountdown();
   }
 
