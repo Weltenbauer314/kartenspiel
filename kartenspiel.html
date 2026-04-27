@@ -1435,6 +1435,19 @@
     if (gs.phase !== 'attack') {
       autoConfirmFired.attack = null;
     }
+    // Reset selectedCard if it's no longer in the player's hand (game state changed under us)
+    if (selectedCard && !myHand.find(c => c.id === selectedCard.id)) {
+      selectedCard = null;
+    }
+    // Clean up attackTarget if target got eliminated or phase changed
+    if (attackTarget) {
+      const targetElim = (gs.eliminated || []).includes(attackTarget);
+      const notAttackPhase = gs.phase !== 'attack';
+      const notMyTurn2 = currentTurnId !== myId;
+      if (targetElim || notAttackPhase || notMyTurn2) {
+        attackTarget = null;
+      }
+    }
 
     // My hand (sorted)
     const handHTML = myHand.map((card, i) => {
@@ -1523,7 +1536,7 @@
         // Auto-advance after short delay.
         // Coordinator = first alive player (not necessarily original host).
         if (isActiveCoordinator(gs)) {
-          const roundKey = `${gs.round}_${gs.currentAttack ? gs.currentAttack.attackerId : 'x'}`;
+          const roundKey = `${gs.round}_${gs.currentAttack ? gs.currentAttack.attackerId : 'x'}_${gs.currentAttack && gs.currentAttack.card ? gs.currentAttack.card.id : 'nocard'}`;
           if (nextTurnTimeoutId !== roundKey) {
             nextTurnTimeoutId = roundKey;
             setTimeout(() => {
@@ -1580,8 +1593,10 @@
       return;
     }
 
-    // Check if we need to (re)start: phase changed or turn changed
-    const newState = `${activePlayerId}_${gs.phase}_${gs.timerTurnStart}`;
+    // Check if we need to (re)start: phase changed, turn changed, or clock value changed
+    // Include a hash of the active player's stored clock so a bonus grant triggers a restart
+    const storedClock = gs.timerClocks[activePlayerId];
+    const newState = `${activePlayerId}_${gs.phase}_${gs.timerTurnStart}_${storedClock}`;
     if (timerTickState === newState) return; // already ticking for this state
     timerTickState = newState;
 
@@ -1748,23 +1763,27 @@
   }
 
   // Grant timer bonus after attack/defend action
+  // NOTE: Always reads fresh state from Firebase to avoid stale elapsed calculations.
+  // Does NOT reset timerTurnStart – that is handled exclusively by nextTurn() to avoid
+  // the bug where two rapid writes with identical Date.now() values cause timerTickState
+  // to not change and the client-side countdown interval never restarts.
   async function grantTimerBonus(playerId) {
-    const gs = gameState;
+    const freshSnap = await get(ref(db, `rooms/${roomId}`));
+    if (!freshSnap.exists()) return;
+    const gs = freshSnap.val();
     if (!gs || !gs.timerClocks || !gs.rules || gs.rules.timerMode === 'endless') return;
     const BONUS = { slow: 30, normal: 20, fast: 10, superfast: 5 };
     const bonus = BONUS[gs.rules.timerMode] || 0;
     if (!bonus) return;
 
-    // The player's current stored time is the original stored value minus elapsed since turn start
-    // But since we're granting bonus at action time, we calculate remaining then add bonus
-    const stored = gs.timerClocks[playerId] || 0;
+    const stored = typeof gs.timerClocks[playerId] === 'number' ? gs.timerClocks[playerId] : 0;
     const elapsed = gs.timerTurnStart ? (Date.now() - gs.timerTurnStart) / 1000 : 0;
     const remaining = Math.max(0, stored - elapsed);
     const newVal = remaining + bonus;
 
     await update(ref(db, `rooms/${roomId}`), {
-      [`timerClocks/${playerId}`]: newVal,
-      timerTurnStart: Date.now()
+      [`timerClocks/${playerId}`]: newVal
+      // timerTurnStart intentionally NOT reset here – nextTurn() owns that reset
     });
   }
 
@@ -1857,6 +1876,12 @@
   window.confirmAttack = async function() {
     if (!selectedCard || !attackTarget) return;
     const gs = gameState;
+    // Guard: only the current attacker may submit
+    if (!gs || gs.phase !== 'attack') return;
+    const alive = gs.playerOrder.filter(id => !(gs.eliminated || []).includes(id));
+    const currentTurnId = gs.turnPlayerId && alive.includes(gs.turnPlayerId)
+      ? gs.turnPlayerId : alive[gs.turnIndex % alive.length];
+    if (currentTurnId !== myId) return;
 
     const hand = [...gs.hands[myId]];
     const idx = hand.findIndex(c => c.id === selectedCard.id);
@@ -1873,18 +1898,22 @@
 
     const logMsg = `${gs.players[myId].name} greift ${gs.players[attackTarget].name} an.`;
 
-    // Timer: grant attacker bonus, reset clock reference for defender's turn
+    // Timer: grant attacker bonus; read fresh clocks to avoid stale local state
     let timerUpdate = {};
     if (gs.timerClocks && gs.rules && gs.rules.timerMode !== 'endless') {
       const BONUS = { slow: 30, normal: 20, fast: 10, superfast: 5 };
       const bonus = BONUS[gs.rules.timerMode] || 0;
-      const stored = gs.timerClocks[myId] || 0;
-      const elapsed = gs.timerTurnStart ? (Date.now() - gs.timerTurnStart) / 1000 : 0;
+      // Fetch fresh clocks so elapsed is calculated against the live timerTurnStart
+      const freshSnap2 = await get(ref(db, `rooms/${roomId}/timerClocks`));
+      const freshClocks = freshSnap2.exists() ? freshSnap2.val() : gs.timerClocks;
+      const freshStartSnap = await get(ref(db, `rooms/${roomId}/timerTurnStart`));
+      const freshStart = freshStartSnap.exists() ? freshStartSnap.val() : gs.timerTurnStart;
+      const stored = typeof freshClocks[myId] === 'number' ? freshClocks[myId] : 0;
+      const elapsed = freshStart ? (Date.now() - freshStart) / 1000 : 0;
       const remaining = Math.max(0, stored - elapsed) + bonus;
       timerUpdate = {
-        [`timerClocks/${myId}`]: remaining,
-        [`timerClocks/${attackTarget}`]: gs.timerClocks[attackTarget] || 0,
-        timerTurnStart: Date.now()
+        [`timerClocks/${myId}`]: remaining
+        // timerTurnStart reset is handled by nextTurn()
       };
     }
 
@@ -1905,6 +1934,8 @@
     const gs = gameState;
     const atk = gs.currentAttack;
     if (!atk || atk.defenderId !== myId) return;
+    // Guard: only valid in defend phase, and defence card not yet played
+    if (gs.phase !== 'defend' || atk.defenseCard) return;
 
     const hand = [...gs.hands[myId]];
     const idx = hand.findIndex(c => c.id === selectedCard.id);
@@ -1923,17 +1954,21 @@
     // Karo 7 vs 2 rule: if attacker plays Karo 7, wins against defender's 2, attacker may swap
     const karo7Win = winner === 'attacker' && atk.card.suit === '♦' && atk.card.rank === '7' && selectedCard.rank === '2';
 
-    // Timer: grant defender bonus after defending
+    // Timer: grant defender bonus after defending – read fresh clocks to avoid stale local state
     let timerUpdateDef = {};
     if (gs.timerClocks && gs.rules && gs.rules.timerMode !== 'endless') {
       const BONUS = { slow: 30, normal: 20, fast: 10, superfast: 5 };
       const bonus = BONUS[gs.rules.timerMode] || 0;
-      const stored = gs.timerClocks[myId] || 0;
-      const elapsed = gs.timerTurnStart ? (Date.now() - gs.timerTurnStart) / 1000 : 0;
+      const freshSnapDef = await get(ref(db, `rooms/${roomId}/timerClocks`));
+      const freshClocksDef = freshSnapDef.exists() ? freshSnapDef.val() : gs.timerClocks;
+      const freshStartSnapDef = await get(ref(db, `rooms/${roomId}/timerTurnStart`));
+      const freshStartDef = freshStartSnapDef.exists() ? freshStartSnapDef.val() : gs.timerTurnStart;
+      const stored = typeof freshClocksDef[myId] === 'number' ? freshClocksDef[myId] : 0;
+      const elapsed = freshStartDef ? (Date.now() - freshStartDef) / 1000 : 0;
       const remaining = Math.max(0, stored - elapsed) + bonus;
       timerUpdateDef = {
-        [`timerClocks/${myId}`]: remaining,
-        timerTurnStart: Date.now()
+        [`timerClocks/${myId}`]: remaining
+        // timerTurnStart reset is handled exclusively by nextTurn()
       };
     }
 
@@ -2040,12 +2075,23 @@
       if (alive.includes(winnerId)) nextPlayerId = winnerId;
     }
 
-    // Timer: reset turn start for the next player's clock
+    // Timer: reset turn start for the next player's clock – this is the SOLE place
+    // timerTurnStart is written, ensuring timerTickState always changes between turns
     let timerNextUpdate = {};
     let newTimerClocks = gs.timerClocks ? { ...gs.timerClocks } : null;
     if (newTimerClocks && gs.rules && gs.rules.timerMode !== 'endless') {
       // Zero out any newly eliminated players' clocks
       newElim.forEach(id => { if (newTimerClocks[id] !== undefined) newTimerClocks[id] = 0; });
+      // Snapshot remaining time for the active player at this moment, if not already updated
+      // (confirmAttack/confirmDefend may have already written a bonus value)
+      const freshTimerSnap = await get(ref(db, `rooms/${roomId}/timerClocks`));
+      if (freshTimerSnap.exists()) {
+        const freshClks = freshTimerSnap.val();
+        // Merge fresh values (bonus may have been written since we read gs)
+        Object.keys(freshClks).forEach(id => {
+          if (!newElim.includes(id)) newTimerClocks[id] = freshClks[id];
+        });
+      }
       timerNextUpdate = { timerClocks: newTimerClocks, timerTurnStart: Date.now() };
     }
 
@@ -2290,15 +2336,6 @@
     <p class="logo-sub">Ein Spiel für 2–4 Spieler</p>
 
     <div class="lobby-box fade-in">
-      <h2>Neues Spiel erstellen</h2>
-      <div class="field">
-        <label>Dein Name</label>
-        <input type="text" id="create-name" placeholder="Name eingeben..." maxlength="20">
-      </div>
-      <button class="btn btn-primary" style="width:100%;margin-top:0.5rem" onclick="createRoom()">Raum erstellen</button>
-
-      <hr class="divider">
-
       <h2 id="join-section">Bestehendem Spiel beitreten</h2>
       <div class="field">
         <label>Dein Name</label>
@@ -2309,6 +2346,15 @@
         <input type="text" id="join-code" placeholder="Z.B. ABC123" maxlength="8" style="text-transform:uppercase">
       </div>
       <button class="btn" style="width:100%;margin-top:0.5rem" onclick="joinRoom()">Beitreten</button>
+
+      <hr class="divider">
+
+      <h2>Neues Spiel erstellen</h2>
+      <div class="field">
+        <label>Dein Name</label>
+        <input type="text" id="create-name" placeholder="Name eingeben..." maxlength="20">
+      </div>
+      <button class="btn btn-primary" style="width:100%;margin-top:0.5rem" onclick="createRoom()">Raum erstellen</button>
 
       <p class="error-msg" id="error-msg" style="margin-top:0.75rem"></p>
     </div>
